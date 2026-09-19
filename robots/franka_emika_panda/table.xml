@@ -1,0 +1,22 @@
+<mujoco model="wooden table">
+  <asset>
+    <material name="wood" rgba="0.55 0.35 0.16 1" specular="0.1" shininess="0.1"/>
+  </asset>
+
+  <default>
+    <!-- Table surface sits at local z=0 so the body's pos can be placed flush with the robot's base height -->
+    <default class="table">
+      <geom type="box" material="wood" contype="1" conaffinity="1"/>
+    </default>
+  </default>
+
+  <worldbody>
+    <body name="table" pos="0.3 0 0">
+      <geom name="table_top" class="table" pos="0 0 -0.02" size="0.6 0.4 0.02"/>
+      <geom name="table_leg_fl" class="table" pos="0.5 0.3 -0.22" size="0.03 0.03 0.18"/>
+      <geom name="table_leg_fr" class="table" pos="0.5 -0.3 -0.22" size="0.03 0.03 0.18"/>
+      <geom name="table_leg_bl" class="table" pos="-0.5 0.3 -0.22" size="0.03 0.03 0.18"/>
+      <geom name="table_leg_br" class="table" pos="-0.5 -0.3 -0.22" size="0.03 0.03 0.18"/>
+    </body>
+  </worldbody>
+</mujoco>

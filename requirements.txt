@@ -1,0 +1,75 @@
+# =============================================================================
+# thesis-project — OpenVLA + Franka (MuJoCo sim + RLDS data mixture + LoRA finetune)
+# Verified working stack (2026-09-18, Python 3.10, Ubuntu 24.04 / glibc 2.39,
+# CUDA 12.x runtime via torch wheels, RTX 4080 laptop 12GB). `pip check` is clean.
+#
+# Covers all three entry points in the repo:
+#   - scripts/openvla_test*.py           (4-bit inference in MuJoCo)
+#   - scripts/data_mixture.py            (RLDS Franka data mixture)
+#   - vlas/openvla/vla-scripts/finetune.py (LoRA fine-tuning)
+#
+# RECOMMENDED INSTALL ORDER (some packages are order/flag sensitive):
+#   1. pip install torch==2.2.0 torchvision==0.17.0 torchaudio==2.2.0
+#   2. pip install -r requirements.txt
+#   3. flash-attn: install the prebuilt wheel below (do NOT compile from source;
+#      system nvcc 12.0 can't parse glibc 2.39 fortified headers).
+#   4. dlimp: install with --no-deps so it doesn't try to re-pin tensorflow.
+#
+# CRITICAL CONFLICT-RESOLVING PINS (do not bump casually):
+#   - numpy==1.26.4          torch 2.2.0 was built against numpy 1.x; numpy 2.x
+#                            breaks torch interop ("RuntimeError: Numpy is not available").
+#   - protobuf==3.20.3       satisfies tensorflow 2.15.0 (<5), tensorflow-metadata
+#                            1.14.0 (<4.21) AND wandb 0.25.0 simultaneously.
+#   - wandb==0.25.0          newest wandb that accepts protobuf 3.20.3. wandb>=0.26
+#                            requires protobuf>=5, which conflicts with tensorflow-metadata.
+#   - tensorflow-metadata==1.14.0  declares protobuf<4.21; newer versions force protobuf 6.x.
+# =============================================================================
+
+# --- PyTorch (install FIRST; PyPI wheels are the cu121 build) ---
+torch==2.2.0
+torchvision==0.17.0
+torchaudio==2.2.0
+
+# --- HuggingFace / OpenVLA model + 4-bit quantization ---
+transformers==4.40.1
+tokenizers==0.19.1
+accelerate==1.1.0            # VERIFIED (2026-09-18) to fix the bnb 4-bit `.to()` bug on
+                              #       transformers 4.40.1 -> quantized finetune.py (use_quantization=True)
+                              #       loads openvla-7b in 4-bit + LoRA with no error. Keep >=1.1.0.
+peft==0.11.1
+bitsandbytes==0.46.1          # newest bnb compatible with torch 2.2.0 (0.47+ pins torch>=2.4)
+timm==0.9.10
+sentencepiece==0.1.99
+huggingface_hub==0.36.2
+safetensors==0.8.0
+einops==0.8.2
+
+# --- flash-attn: prebuilt wheel matching torch2.2 / cu12 / cxx11abiFALSE / cp310 ---
+# Install AFTER torch. Do NOT compile from source on this machine.
+flash-attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.5.5/flash_attn-2.5.5+cu122torch2.2cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+
+# --- MuJoCo simulation ---
+mujoco==3.13.0
+
+# --- RLDS data pipeline (TensorFlow stack, pinned to OpenVLA's tested versions) ---
+tensorflow==2.15.0
+tensorflow-datasets==4.9.3
+tensorflow-metadata==1.14.0
+tensorflow-graphics==2021.12.3
+draccus==0.8.0
+# dlimp is a git dependency; install it with --no-deps so it does not re-pin tensorflow:
+#   pip install --no-deps "dlimp @ git+https://github.com/moojink/dlimp_openvla"
+dlimp @ git+https://github.com/moojink/dlimp_openvla
+
+# --- Fine-tuning: experiment logging ---
+wandb==0.25.0
+
+# --- prismatic (OpenVLA) utility deps used by the scripts ---
+rich==15.0.0
+matplotlib==3.10.9
+json-numpy==2.1.1
+jsonlines==4.0.0
+
+# --- Conflict-resolving version pins (see header) ---
+numpy==1.26.4
+protobuf==3.20.3

@@ -1,0 +1,40 @@
+<mujoco model="panda scene">
+  <include file="panda.xml"/>
+  <include file="table.xml"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global azimuth="120" elevation="-20"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3"
+      markrgb="0.8 0.8 0.8" width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0 0 1.5" dir="0 0 -1" directional="true"/>
+    <!-- Floor sits below the table legs; the tabletop surface stays at z=0, flush with the robot's base -->
+    <geom name="floor" pos="0 0 -0.4" size="0 0 0.05" type="plane" material="groundplane"/>
+    <!-- Static aim point at the cube's start pose; camera targets this (not the cube) so the view stays put after the cube is grabbed -->
+    <body name="cube_target" pos="0.7 0 0.03">
+      <site name="cube_target" size="0.01" rgba="1 0 0 0.5"/>
+    </body>
+    <camera name="scene_cam" mode="targetbody" target="cube_target" pos="2.0 0.0 0.7" fovy="50"/>
+    <body name="cube" pos="0.7 0 0.03">
+      <freejoint/>
+      <geom name="cube" type="box" size="0.025 0.025 0.025" condim="3" friction="1 0.03 0.003" rgba="0 1 0 1"
+        contype="2" conaffinity="1" solref="0.01 1"/>
+    </body>
+  </worldbody>
+
+  <!-- panda.xml's "home" keyframe predates the cube's freejoint DOFs; this one covers the full model -->
+  <!-- Inverted-L start: shoulder up, elbow bent, wrist compensating so the gripper points straight down and stays in scene_cam view -->
+  <keyframe>
+    <key name="task_start" qpos="0 0 0 -2.1 0 2.1 0.666 0.04 0.04 0.7 0 0.03 1 0 0 0"
+      ctrl="0 0 0 -2.1 0 2.1 0.666 255"/>
+  </keyframe>
+</mujoco>

@@ -1,0 +1,5 @@
+#Python venv directories
+.venv/
+datasets/
+robots/unitree_g1
+token.txt
