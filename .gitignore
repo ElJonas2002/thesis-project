@@ -1,5 +1,25 @@
-#Python venv directories
+#Python venv and other directories
 .venv/
+
+#ROS 2 build directories
+build/
+install/
+log/
+
+# Scripts not needed
+**/__pycache__
+scripts/offline_tests.py
+scripts/openvla_test_v2.py
+scripts/runpod_finetune.sh
+scripts/graspnet_export.py
+
+#Models
+runs/
+models/
+
+# Other files
+hf.txt
 /datasets/
-robots/unitree_g1
-token.txt
+/superdec/
+robots/
+weights/
