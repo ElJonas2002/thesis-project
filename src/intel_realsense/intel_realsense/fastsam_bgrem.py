@@ -8,7 +8,7 @@ import torch
 import rclpy
 from rclpy.node import Node
 import message_filters
-from rclpy.qos import QoSProfile, DurabilityPolicy
+from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 from rcl_interfaces.msg import SetParametersResult
 from sensor_msgs.msg import Image, CameraInfo, PointCloud2
 from std_msgs.msg import String, Float64MultiArray
@@ -68,7 +68,7 @@ class FastSAMNode(Node):
         self.declare_parameter('ransac_samples', 4000)
         self.declare_parameter('min_blob_area', 300)
         self.declare_parameter('freeze_plane', False)
-        self.declare_parameter('show_window', True)
+        self.declare_parameter('show_window', False)
 
         # ==================== MASK FILTER PARAMETERS ====================
         self.declare_parameter('max_mask_ratio', 0.3)    # masks larger than this image fraction are table/background
@@ -124,10 +124,15 @@ class FastSAMNode(Node):
         self.palette = color_palette(32)
         self.fps = 0.0
         self.saved = 0
+        self.count_prev = 0
+        self.last_prompt = ''
 
-        # Runtime prompt changes: `ros2 param set` or a String on ~/prompt.
+        # Runtime prompt changes: `ros2 param set` or a String on ~/prompt (e.g. from prompt_cli).
         self.add_on_set_parameters_callback(self.on_parameters)
-        self.prompt_sub = self.create_subscription(String, '~/prompt', self.prompt_callback, 10)
+        self.prompt_sub = self.create_subscription(
+            String, '~/prompt', self.prompt_callback,
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                       durability=DurabilityPolicy.TRANSIENT_LOCAL))
 
         self.get_logger().info(f"FastSAM initialized with model={model_file}, device={self.device}, conf={self.conf}, iou={self.iou}, prompt={self.texts}")
 
@@ -285,29 +290,29 @@ class FastSAMNode(Node):
             normal, offset = self.plane
             self.plane_pub.publish(Float64MultiArray(data=[*map(float, normal), float(offset)]))
 
+        count = len(masks)
         if self.show_window:
             annotated = overlay_masks(color.copy(), masks, self.palette)
-            count = len(masks)
             cv.putText(annotated, f"{self.fps:5.1f} FPS | {count} masks", (10, 25),
                         cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv.LINE_AA)
             label = f"prompt: {', '.join(self.texts)}" if self.texts else "prompt: (segment everything)"
             cv.putText(annotated, label, (10, 50),
                        cv.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2, cv.LINE_AA)
-            cv.imshow("YOLOv8Seg", annotated)
+            cv.imshow("FastSAM", annotated)
 
             key = cv.waitKey(1) & 0xFF
             if key == ord('q'):
                 raise KeyboardInterrupt
             if key == ord('s'):
-                path = f"yolov8seg_frame_{self.saved:03d}.png"
+                path = f"FastSAM_frame_{self.saved:03d}.png"
                 cv.imwrite(path, annotated)
                 print(f"Saved {path}")
                 self.saved += 1
-            if key == ord('t'):
-                # Blocks spinning until the prompt is typed in the node's terminal.
-                self.set_prompt(input("Text prompt (empty = segment everything): "))
-            if key == ord('c'):
-                self.set_prompt('')
+        else:
+            if self.count_prev != count or self.last_prompt != self.texts:
+                self.get_logger().info(f"Mask count: {count}")
+            self.count_prev = count
+            self.last_prompt = self.texts
 
 def main(args=None):
     rclpy.init(args=args)

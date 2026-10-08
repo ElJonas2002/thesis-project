@@ -1,6 +1,6 @@
-# Thesis project progress — 3D perception for VLA-driven robotic manipulation
+# Thesis project logbook — 3D perception for VLA-driven robotic manipulation
 
-> **Last update**: 2026-10-07
+> **Last update**: 2026-10-08
 
 ## 1. Project goal
 
@@ -222,7 +222,17 @@ python scripts/superdec_offline.py --canonical --denoise --complete --uniform --
 
 #### Step 13 — Launch file
 
-[sq_launch.py](../src/intel_realsense/launch/sq_launch.py) starts `fastsam_node` and `superdec_node` with all the arguments exposed. `fastsam_node` runs inside its own `gnome-terminal` because `ros2 launch` does not forward stdin, which the `t` prompt key needs.
+[sq_launch.py](../src/intel_realsense/launch/sq_launch.py) starts `fastsam_node` and `superdec_node` with all the arguments exposed.
+
+#### Step 14 — Headless prompting: `prompt_cli`
+
+Prompting used to require the OpenCV window (`t` key) and a dedicated `gnome-terminal`, since `ros2 launch` does not forward stdin. [prompt_cli.py](../src/intel_realsense/intel_realsense/prompt_cli.py) decouples it:
+
+- **Separate node** run with `ros2 run intel_realsense prompt_cli` in any terminal; works with `show_window:=false`.
+- **Keys**: `t` types a comma-separated prompt, `c` segments everything, `q` quits. Piped stdin publishes one prompt per line (`echo "cup, bowl" | ros2 run …`).
+- **Interface**: `std_msgs/String` on `/fastsam_node/prompt`, latched (`TRANSIENT_LOCAL`, depth 1) on both ends so a late `fastsam_node` still gets the last prompt.
+- `fastsam_node` no longer blocks on `input()`; the window keeps only `q` (quit) and `s` (save). The `gnome-terminal` prefix was removed from the launch file.
+- The topic is the entry point for a future VLA module that decomposes complex instructions into FastSAM prompts without pausing segmentation.
 
 ---
 
@@ -251,6 +261,7 @@ flowchart TD
         CLIP --> LAB[Overlap resolution<br/>+ sliver removal]
     end
 
+    CLI[prompt_cli / VLA] -->|~/prompt, latched| CLIP
     LAB --> T1[~/foreground/mask]
     LAB --> T2[~/foreground/points<br/>x,y,z,instance]
     RANSAC --> T3[~/foreground/plane<br/>latched]
@@ -274,7 +285,7 @@ flowchart TD
 | `~/foreground/mask` (pub) | `sensor_msgs/Image` (mono8) | Binary object mask |
 | `~/foreground/points` (pub) | `sensor_msgs/PointCloud2` | `x, y, z, instance` |
 | `~/foreground/plane` (pub, latched) | `std_msgs/Float64MultiArray` | `[nx, ny, nz, d]` |
-| `~/prompt` (sub) | `std_msgs/String` | Comma-separated text prompt |
+| `~/prompt` (sub, latched) | `std_msgs/String` | Comma-separated text prompt (from `prompt_cli` or the VLA) |
  
 ### `superdec_node` interface
 
@@ -400,6 +411,7 @@ Primitives are only published as `MarkerArray` for RViz. A typed message (per in
 | Closed-form primitive merging | ✅ (0.13 s) |
 | `superdec_node` with batching and markers | ✅ |
 | Launch file `sq_launch.py` | ✅ |
+| Headless prompting (`prompt_cli`) | ✅ |
 | Multi-view TSDF fusion | ⬜ next |
 | SuperDec fine-tuning | ⬜ pending |
 | Typed superquadric message + robot-frame TF | ⬜ pending |

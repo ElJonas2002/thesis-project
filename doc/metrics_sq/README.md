@@ -31,8 +31,8 @@ Follows the *Unseen Object Instance Segmentation* protocol (UOIS-Net, Xie et al.
 | Metric | Column | Formula | Direction | Description |
 | :---: | :---: | :---: | :---: | :--- |
 | **Overlap F** | `inst_overlap_f` | $\dfrac{2PR}{P+R}$, with $P=\dfrac{\sum_{\text{match}} I_{ij}}{\sum_i\lvert\hat M_i\rvert}$, $R=\dfrac{\sum_{\text{match}} I_{ij}}{\sum_j\lvert M_j\rvert}$ | ↑ | **Main UOIS metric.** Unlike `fg_iou`, it penalises merging two objects into one, because half of the merged blob has no match. |
-| **%F ≥ 0.75** | `inst_f075` | $\dfrac{1}{G}\,\#\{j : F_{ij}\ge 0.75\}$ over matched pairs ($G$ = number of GT objects) | ↑ | Fraction of objects segmented well enough to be usable. The most interpretable one for manipulation ("the robot can use 55% of the objects"). |
-| **Under-segmentation** | `inst_under_seg` | $\#\{i : \#\{j : I_{ij}/\lvert M_j\rvert\ge 0.5\}\ge 2\}$ | ↓ | Predictions per frame that swallow at least half of two or more objects: touching objects merged into one blob. Expected failure of `connectedComponentsWithStats`. |
+| **%F ≥ 0.75** | `inst_f075` | $\dfrac{1}{G}\,\text{\#}\{j : F_{ij}\ge 0.75\}$ over matched pairs ($G$ = number of GT objects) | ↑ | Fraction of objects segmented well enough to be usable. The most interpretable one for manipulation ("the robot can use 55% of the objects"). |
+| **Under-segmentation** | `inst_under_seg` | $\text{\#}\{i : \#\{j : I_{ij}/\lvert M_j\rvert\ge 0.5\}\ge 2\}$ | ↓ | Predictions per frame that swallow at least half of two or more objects: touching objects merged into one blob. Expected failure of `connectedComponentsWithStats`. |
 
 ## 3. Point-cloud quality (`pc_*`)
 
@@ -44,8 +44,8 @@ For each matched pair, $\hat X$ is the predicted cloud, $X$ the reference, $d(\c
 
 | Metric | Column | Formula | Direction | Description |
 | :---: | :---: | :---: | :---: | :--- |
-| **Outlier ratio** | `pc_outlier_ratio` | $\dfrac{1}{\lvert\hat X\rvert}\#\{x\in\hat X : d(x,X)>\tau\}$ | ↓ | Geometric contamination (flying pixels, tails, curtains, table points). Key metric: `normalize_points` uses $2\max\lvert p\rvert$, so **a single distant outlier shrinks the whole cloud**. |
-| **Completeness** | `pc_completeness` | $\dfrac{1}{\lvert X\rvert}\#\{y\in X : d(y,\hat X)\le\tau\}$ | ↑ | Fraction of the real visible surface that was covered. Low values mean a cropped object (e.g. `plane_clearance` cutting its base), so SuperDec gets an incomplete shape. |
+| **Outlier ratio** | `pc_outlier_ratio` | $\dfrac{1}{\lvert\hat X\rvert}\text{\#}\{x\in\hat X : d(x,X)>\tau\}$ | ↓ | Geometric contamination (flying pixels, tails, curtains, table points). Key metric: `normalize_points` uses $2\max\lvert p\rvert$, so **a single distant outlier shrinks the whole cloud**. |
+| **Completeness** | `pc_completeness` | $\dfrac{1}{\lvert X\rvert} \text{\#}\{y\in X : d(y,\hat X)\le\tau\}$ | ↑ | Fraction of the real visible surface that was covered. Low values mean a cropped object (e.g. `plane_clearance` cutting its base), so SuperDec gets an incomplete shape. |
 
 ---
 

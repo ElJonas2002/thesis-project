@@ -30,7 +30,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            #'irs_node = intel_realsense.depth_ransac_bgrem:main',
+            'prompt_cli = intel_realsense.prompt_cli:main',
             'superdec_node = intel_realsense.superdec_node:main',
             'fastsam_node = intel_realsense.fastsam_bgrem:main',
         ],

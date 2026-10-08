@@ -18,7 +18,7 @@ def generate_launch_description():
                                       description='Text prompt for FastSAM segmentation to detect specific objects')
     arg_freeze_plane = DeclareLaunchArgument('freeze_plane', default_value='false',
                                              description='Reuses the first valid plane')
-    arg_show_window = DeclareLaunchArgument('show_window', default_value='true',
+    arg_show_window = DeclareLaunchArgument('show_window', default_value='false',
                                             description='OpenCV debug window')
     
     # 1.2 SuperDec node arguments
@@ -42,7 +42,7 @@ def generate_launch_description():
                                           description='Grid merge exponent')
     arg_resolution = DeclareLaunchArgument('resolution', default_value='12',
                                              description='Marker mesh resolution for superquadrics visualization')
-    arg_rate = DeclareLaunchArgument('rate', default_value='1',
+    arg_rate = DeclareLaunchArgument('rate', default_value='1.0',
                                       description='Timer rate for superdec_node (Hz)')
     arg_min_points = DeclareLaunchArgument('min_points', default_value='50',
                                            description='Minimum number of points for building superquadrics')
@@ -83,8 +83,6 @@ def generate_launch_description():
             package='intel_realsense',
             executable='fastsam_node',
             name='fastsam_node',
-            # ros2 launch doesn't forward stdin, so input() needs its own terminal
-            prefix='gnome-terminal --wait --',
             output='screen',
             parameters=[{'model': fastsam_model, 
                          'img_size': image_size, 

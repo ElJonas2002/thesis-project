@@ -1,16 +1,22 @@
 # 🤖️ Master of Sciences in Robotics and AI Thesis Project
 
-> **Version: 1.0**
+> **Superquadrics Module Version: 1.1**
 
 ## 📋️ Table of Contents
 
+1. [Prerequisites](#️-prerequisites)
 1. [Initial Setup](#️-initial-setup)
 2. [Quick Start](#️-quick-start)
 3. [Project Structure](#️-project-structure)
 3. [Resources](#️-resources)
 
+## 🖥️ Prerequisites
+- **Python venv version**: 3.12
+- **Ubuntu version**: 24.04
+- **ROS2 version**: Jazzy
+
 ## 🛠️ Initial Setup
-> **Python venv version**: 3.12
+
 
 1. Activate your virtual environment and install the required dependencies using the `requirements.txt` file:
     ```sh
@@ -48,9 +54,8 @@
     __all__ = ['_backend']
     ```
 
-5. Source your ROS overlay and build:
+5. Build the project:
     ```sh
-    source install/setup.bash
     colcon build
     ```
 
@@ -65,14 +70,21 @@
     ros2 launch realsense2_camera rs_launch.py align_depth.enable:=true decimation_filter.enable:=true spatial_filter.enable:=true temporal_filter.enable:=true
     ```
 
-2. Launch the superquadrics generator with the following command:
+2. Open a second terminal and launch the superquadrics generator with the following command (*this launch file is intended to be a headless version; use the `show_window` argument to see an OpenCV debug window*):
     ```sh
-    ros2 launch intel_realsense sq_launch.py
+    source install/setup.bash
+    ros2 launch intel_realsense sq_launch.py show_window:=true
     ```
     > **💡️ Tip**: Use the `-s` short-handed argument to see all ROS arguments that this launch file can receive.
 
-3. Press `t`  when the OpenCV window is active to write in the GNOME terminal a **simple prompt** (*e.g. purple cube*) or a **set of comma-separated simple prompts** (*e.g. orange cube, black drill, ...*) describing the object(s) you want the model to find. You suppose to see the desired object(s) segmented with a color mask in the OpenCV window.
-4. Press `c` when the OpenCV window is active to see all the segmented objects in the scene.
+3. Open a third terminal and run the PromptCLI interface for FastSAM model:
+    ```sh
+    source install/setup.bash
+    ros2 run intel_realsense prompt_cli
+    ```
+    - Press `t`  to write a **simple prompt** (*e.g. purple cube*) or **comma-separated simple prompts** (*e.g. orange cube, black drill, ...*) describing the object(s) you want the model to find. You are supposed to see the desired objects segmented with color masks in the OpenCV window.
+    - Press `c` to segment all objects in the scene.
+    - Press `q` to exit.
   5. To visualize binary segmentation mask, supequadrics and point clouds, open RViz2 and load the [RViz2 Visualization file](visualization/sq_visualization.rviz).
 ## 🪾️ Project Structure
 ```
@@ -91,4 +103,4 @@
 
 ## 🧪️ Resources
 - [Superquadrics Generator Metrics](doc/metrics_sq)
-- [Project Decisions Journal](doc/PROJECT_PROGRESS.md)
+- [Project Logbook](doc/PROJECT_LOGBOOK.md)
