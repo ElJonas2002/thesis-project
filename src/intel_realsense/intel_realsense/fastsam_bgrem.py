@@ -12,6 +12,7 @@ from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 from rcl_interfaces.msg import SetParametersResult
 from sensor_msgs.msg import Image, CameraInfo, PointCloud2
 from std_msgs.msg import String, Float64MultiArray
+from std_srvs.srv import Trigger
 from ultralytics.utils.ops import scale_masks
 from intel_realsense.bgrem_utils import *
 
@@ -69,6 +70,7 @@ class FastSAMNode(Node):
         self.declare_parameter('min_blob_area', 300)
         self.declare_parameter('freeze_plane', False)
         self.declare_parameter('show_window', False)
+        self.declare_parameter('snapshot_min_points', 512)
 
         # ==================== MASK FILTER PARAMETERS ====================
         self.declare_parameter('max_mask_ratio', 0.3)    # masks larger than this image fraction are table/background
@@ -87,6 +89,7 @@ class FastSAMNode(Node):
         self.min_blob_area = self.get_parameter('min_blob_area').value
         self.freeze_plane = self.get_parameter('freeze_plane').value
         self.show_window = self.get_parameter('show_window').value
+        self.snapshot_min_points = self.get_parameter('snapshot_min_points').value
 
         self.rng = np.random.default_rng(0)
         self.kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, (5, 5))
@@ -120,6 +123,8 @@ class FastSAMNode(Node):
             Float64MultiArray, '~/foreground/plane',
             QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
 
+        self.snapshot_srv = self.create_service(Trigger, '~/snapshot', self.snapshot_callback)
+
         self.texts = parse_prompt(self.prompt)
         self.palette = color_palette(32)
         self.fps = 0.0
@@ -151,6 +156,35 @@ class FastSAMNode(Node):
 
     def prompt_callback(self, msg):
         self.set_prompt(msg.data)
+
+    def snapshot_callback(self, request, response):
+        """Dump the latest instance cloud in the layout `scripts/superdec_offline.py` reads."""
+        if self.last_cloud is None:
+            response.success = False
+            response.message = 'No cloud received yet.'
+            return response
+
+        points, ids = self.last_cloud
+        folder = os.path.join(SNAPSHOT_PATH, time.strftime('%Y%m%d_%H%M%S'))
+        os.makedirs(folder, exist_ok=True)
+
+        written = 0
+        for label in np.unique(ids):
+            cluster = points[ids == label]
+            if label > 0 and cluster.shape[0] >= self.snapshot_min_points:
+                write_ply(os.path.join(folder, f'obj{int(label):02d}.ply'), cluster)
+                written += 1
+
+        # --canonical needs the table plane the cloud was segmented against.
+        if self.plane is not None:
+            normal, offset = self.plane
+            np.savez(os.path.join(folder, 'plane.npz'), normal=normal, offset=offset)
+
+        response.success = written > 0
+        response.message = (f'Wrote {written} objects to {folder}' if written
+                            else f'No instance reached {self.snapshot_min_points} points.')
+        self.get_logger().info(response.message)
+        return response
 
     def info_callback(self, msg):
             """

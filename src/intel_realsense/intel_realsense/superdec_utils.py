@@ -14,18 +14,6 @@ import torch
 N_POINTS = 4096
 
 
-def write_ply(path, points):
-    """Minimal binary PLY writer so the node stays free of open3d/trimesh."""
-    header = ("ply\n"
-              "format binary_little_endian 1.0\n"
-              f"element vertex {points.shape[0]}\n"
-              "property float x\nproperty float y\nproperty float z\n"
-              "end_header\n")
-    with open(path, 'wb') as f:
-        f.write(header.encode('ascii'))
-        f.write(points.astype(np.float32).tobytes())
-
-
 def add_superdec_to_path(root):
     """The repo folder `superdec/` shadows the package of the same name, so its parent wins."""
     root = os.path.abspath(root)

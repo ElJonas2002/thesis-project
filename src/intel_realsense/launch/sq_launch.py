@@ -44,14 +44,14 @@ def generate_launch_description():
                                              description='Marker mesh resolution for superquadrics visualization')
     arg_rate = DeclareLaunchArgument('rate', default_value='1.0',
                                       description='Timer rate for superdec_node (Hz)')
-    arg_min_points = DeclareLaunchArgument('min_points', default_value='50',
-                                           description='Minimum number of points for building superquadrics')
     arg_max_instances = DeclareLaunchArgument('max_instances', default_value='8',
                                                description='Maximum number of superquadrics instances to build')
     
     # 1.3 Common arguments
     arg_device = DeclareLaunchArgument('device', default_value='',
                                         description='Device to use for computation (e.g., cpu or cuda)')
+    arg_min_points = DeclareLaunchArgument('min_points', default_value='512',
+                                               description='Minimum number of points for building superquadrics')
     
     # 2. Get argument values
     fastsam_model = LaunchConfiguration('model')
@@ -91,7 +91,8 @@ def generate_launch_description():
                          'device': device, 
                          'prompt': prompt, 
                          'freeze_plane': freeze_plane, 
-                         'show_window': show_window}])
+                         'show_window': show_window,
+                         'snapshot_min_points': min_points}])
     
     superdec_node = Node(
             package='intel_realsense',

@@ -1,6 +1,6 @@
 # Thesis project logbook — 3D perception for VLA-driven robotic manipulation
 
-> **Last update**: 2026-10-08
+> **Last update**: 2026-10-13
 
 ## 1. Project goal
 
@@ -132,13 +132,9 @@ The script [eval_segmentation.py](../scripts/eval_segmentation.py) evaluates eve
 
 ### 2.2 Shape abstraction: SuperDec
 
-#### Step 8 — Building SuperDec against torch 2.14
+#### Step 8 — Offline validation and preprocessing
 
-Importing SuperDec JIT-compiles the PVCNN CUDA extension. It failed until nvcc matched the torch CUDA runtime exactly and C++20 was enabled (see §5).
-
-#### Step 9 — Offline validation and preprocessing
-
-[superdec_offline.py](../scripts/superdec_offline.py) runs the `normalized` checkpoint on captured `.ply` clouds, with switches to measure each preprocessing step. All preprocessing now lives in [superdec_utils.py](../src/intel_realsense/intel_realsense/superdec_utils.py), so the bench and the ROS node run **the same code path**.
+[superdec_offline.py](../scripts/superdec_offline.py) runs the `normalized` checkpoint on the clouds captured by the `~/snapshot` service of `fastsam_node` (`ros2 service call /fastsam_node/snapshot std_srvs/srv/Trigger`, which writes `snapshots/<timestamp>/objNN.ply` plus `plane.npz`), with switches to measure each preprocessing step. All preprocessing now lives in [superdec_utils.py](../src/intel_realsense/intel_realsense/superdec_utils.py), so the bench and the ROS node run **the same code path**. On a headless server `--export` writes the fitted meshes and the segmented clouds as PLY pairs to open elsewhere; `--viser` still serves them over port 8080.
 
 | Switch | What it does | Why |
 |---|---|---|
@@ -165,7 +161,7 @@ and, finally, by the **Solina-Bajcsy radial distance** from the cloud to the clo
 
 `--lm` (SuperDec's Levenberg-Marquardt refinement) gave no measurable gain (flatness 0.401 → 0.404) and is not used. `--extrude` (solid fill) was superseded by `--complete`.
 
-#### Step 10 — Box bias refinement
+#### Step 9 — Box bias refinement
 
 **Finding.** SuperDec assigns the same cross-section exponent to a cube (`eps_sect` 0.288) and a cylinder (0.294). Its training categories (table, car, chair, airplane, sofa, …) are dominated by flat faces and contain no cylindrical containers: a **domain gap**.
 
@@ -178,7 +174,7 @@ and, finally, by the **Solina-Bajcsy radial distance** from the cloud to the clo
 
 The objective separates cube from cylinder; **the bias is in the network**, which empirically justifies **fine-tuning SuperDec** as a thesis contribution.
 
-#### Step 11 — Closed-form primitive merging (adopted)
+#### Step 10 — Closed-form primitive merging (adopted)
 
 Key observation: **9 of the 11 parameters have a closed-form estimate**. For a group of points, the centroid gives the translation, the PCA eigenvectors give the rotation and the per-axis maximum gives the extents. Only the two exponents and a global shrink factor need searching.
 
@@ -204,12 +200,12 @@ Each round fits **all pairs in one call** and accepts only the best merge. The s
 **Adopted configuration** (defaults of `SuperDecRunner` and of the launch file):
 
 ```bash
-python scripts/superdec_offline.py --canonical --denoise --complete --uniform --merge
+python scripts/superdec_offline.py --canonical --denoise --complete --uniform --merge --viser --export exports/run01
 ```
 
 ### 2.3 ROS 2 integration
 
-#### Step 12 — `superdec_node`
+#### Step 11 — `superdec_node`
 
 [superdec_node.py](../src/intel_realsense/intel_realsense/superdec_node.py) turns the instance cloud into superquadrics:
 
@@ -220,11 +216,11 @@ python scripts/superdec_offline.py --canonical --denoise --complete --uniform --
 - **Triggering**: a 1 Hz timer plus an on-demand `~/decompose` service. Inputs use a reentrant callback group and the work a mutually exclusive one, under a `MultiThreadedExecutor`, so new clouds keep arriving while inference runs. A failed frame is logged without killing the node.
 - **Visualisation**: `MarkerArray` on `~/primitives`, one `TRIANGLE_LIST` per primitive (12 × 24 parametric grid shared by all primitives), a `DELETEALL` first, and golden-angle colours per instance.
 
-#### Step 13 — Launch file
+#### Step 12 — Launch file
 
 [sq_launch.py](../src/intel_realsense/launch/sq_launch.py) starts `fastsam_node` and `superdec_node` with all the arguments exposed.
 
-#### Step 14 — Headless prompting: `prompt_cli`
+#### Step 13 — Headless prompting: `prompt_cli`
 
 Prompting used to require the OpenCV window (`t` key) and a dedicated `gnome-terminal`, since `ros2 launch` does not forward stdin. [prompt_cli.py](../src/intel_realsense/intel_realsense/prompt_cli.py) decouples it:
 
@@ -233,6 +229,9 @@ Prompting used to require the OpenCV window (`t` key) and a dedicated `gnome-ter
 - **Interface**: `std_msgs/String` on `/fastsam_node/prompt`, latched (`TRANSIENT_LOCAL`, depth 1) on both ends so a late `fastsam_node` still gets the last prompt.
 - `fastsam_node` no longer blocks on `input()`; the window keeps only `q` (quit) and `s` (save). The `gnome-terminal` prefix was removed from the launch file.
 - The topic is the entry point for a future VLA module that decomposes complex instructions into FastSAM prompts without pausing segmentation.
+
+#### Step 14: Windows Support
+Since Isaac Sim runs locally on a Windows machine at the lab and it will be the simulator needed to develop tests and model trainings, a Windows support for the code was required. See the [Windows initial setup guide](WINDOWS_SETUP.md) for more details about the implementation.
 
 ---
 
@@ -286,6 +285,7 @@ flowchart TD
 | `~/foreground/points` (pub) | `sensor_msgs/PointCloud2` | `x, y, z, instance` |
 | `~/foreground/plane` (pub, latched) | `std_msgs/Float64MultiArray` | `[nx, ny, nz, d]` |
 | `~/prompt` (sub, latched) | `std_msgs/String` | Comma-separated text prompt (from `prompt_cli` or the VLA) |
+| `~/snapshot` (srv) | `std_srvs/Trigger` | Dumps the latest instance cloud to `snapshots/<timestamp>/objNN.ply` + `plane.npz` for the offline bench |
  
 ### `superdec_node` interface
 
@@ -333,36 +333,7 @@ For a perception module feeding a planner, latency dominates. The Adam refinemen
 
 ---
 
-## 5. Other solved challenges
-
-### SuperDec did not build against torch 2.14
-
-`superdec/functional/backend.py` JIT-compiles the PVCNN CUDA extension at import time; the `StackedPVConv` point encoder makes it unavoidable.
-
-| # | Finding |
-|---|---|
-| 1 | With `-std=c++17`, a **torch** header failed: torch 2.14 requires C++20 |
-| 2 | With `-std=c++20`, **nvcc 12.0** died in GCC 12's `type_traits` |
-| 3 | nvcc 13.4 → *"CUDA compiler and CUDA toolkit headers are incompatible"* |
-| 4 | **Key:** `cccl` requires nvcc to match the `CUDART_VERSION` shipped with torch exactly. torch cu130 → nvcc **13.0.x** |
-
-```bash
-pip install "nvidia-cuda-nvcc==13.0.88" "nvidia-cuda-crt==13.0.88" \
-            "nvidia-nvvm==13.0.88" "nvidia-cuda-cccl==13.0.85"
-```
-
-Plus `-std=c++20` for host and device, and `g++-13`. Two traps:
-
-1. `torch.utils.cpp_extension` resolves `CUDA_HOME` **once, at import**; environment variables must be set before it.
-2. `os.path.dirname(os.__file__)` points to the system stdlib, not the venv; use `sysconfig.get_paths()['purelib']`.
-
-> ⚠️ The patch lives inside the SuperDec clone. A `git pull` there removes it.
-
-
-
----
-
-## 6. Open challenges
+## 5. Open challenges
 
 ### A — Partial clouds (mitigated, not solved)
 
@@ -406,7 +377,7 @@ Primitives are only published as `MarkerArray` for RViz. A typed message (per in
 | Segmentation benchmark on GraspNet-1Billion | ✅ |
 | Touching objects | ✅ solved by FastSAM |
 | SuperDec build against torch 2.14 | ✅ |
-| Offline SuperDec bench + radial-error metric | ✅ |
+| Offline SuperDec bench + radial-error metric | ✅ (snapshot service + PLY export) |
 | Adam refinement of primitives | ⚠️ implemented and retired (56 s) |
 | Closed-form primitive merging | ✅ (0.13 s) |
 | `superdec_node` with batching and markers | ✅ |

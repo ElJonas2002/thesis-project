@@ -1,5 +1,6 @@
 """Background removal utility functions for Intel RealSense."""
 
+import os
 import cv2 as cv
 import numpy as np
 from sensor_msgs.msg import Image, PointField, PointCloud2
@@ -24,6 +25,19 @@ ENCODINGS = {
 RGB_TOPIC = 'camera/camera/color/image_raw'
 DEPTH_TOPIC = 'camera/camera/aligned_depth_to_color/image_raw'
 INFO_TOPIC = 'camera/camera/color/camera_info'
+SNAPSHOT_PATH = os.path.join(os.getcwd(), 'snapshots')
+
+
+def write_ply(path, points):
+    """Minimal binary PLY writer so the node stays free of open3d/trimesh."""
+    header = ("ply\n"
+              "format binary_little_endian 1.0\n"
+              f"element vertex {points.shape[0]}\n"
+              "property float x\nproperty float y\nproperty float z\n"
+              "end_header\n")
+    with open(path, 'wb') as f:
+        f.write(header.encode('ascii'))
+        f.write(points.astype(np.float32).tobytes())
 
 
 def image_to_array(img_msg):

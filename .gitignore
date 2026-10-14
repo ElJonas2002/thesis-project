@@ -19,7 +19,10 @@ models/
 
 # Other files
 hf.txt
+cyclonedds_config.xml
 /datasets/
 /superdec/
 robots/
 weights/
+snapshots/
+exports/

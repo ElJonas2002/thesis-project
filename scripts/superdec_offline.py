@@ -1,12 +1,18 @@
 """
-Offline sanity check for SuperDec on point clouds captured by the irs_node snapshot service.
+Offline sanity check for SuperDec on point clouds captured by the fastsam_node snapshot service.
 
-Runs the `normalized` checkpoint over every *_objNN.ply of a snapshot and reports how many
-superquadrics survive, how big they are, and how well they cover the input. The preprocessing
-switches (--canonical, --extrude, --denoise) exist to measure what each one is worth before
-any of it gets baked into a ROS node.
+Capture a scene with:
 
-    python scripts/superdec_offline.py --snapshot snapshots --canonical --denoise --viser
+    ros2 service call /fastsam_node/snapshot std_srvs/srv/Trigger
+
+which writes snapshots/<timestamp>/objNN.ply plus plane.npz. This script then runs the
+`normalized` checkpoint over every object of a snapshot and reports how many superquadrics
+survive, how big they are, and how well they cover the input. The preprocessing switches
+(--canonical, --extrude, --denoise) exist to measure what each one is worth before any of it
+gets baked into a ROS node. Without a display, --export writes the fitted meshes and the
+segmented clouds as PLY files to open elsewhere.
+
+    python scripts/superdec_offline.py --canonical --denoise --export exports/run01
 """
 import argparse
 import glob
@@ -31,7 +37,7 @@ from superdec.utils.predictions_handler import PredictionHandler  # noqa: E402
 
 
 def read_ply(path):
-    """Read the binary xyz PLY written by irs_node."""
+    """Read the binary xyz PLY written by fastsam_node."""
     with open(path, 'rb') as f:
         header = b''
         while True:
@@ -42,6 +48,18 @@ def read_ply(path):
         count = int(re.search(rb'element vertex (\d+)', header).group(1))
         data = np.frombuffer(f.read(count * 12), dtype='<f4')
     return data.reshape(count, 3).astype(np.float64)
+
+
+def resolve_snapshot(path):
+    """Accept either a capture folder or the parent, in which case the newest capture wins."""
+    if glob.glob(os.path.join(path, 'obj*.ply')):
+        return path
+    # Capture folders are named after their timestamp, so sorting by name sorts by time.
+    captures = [d for d in sorted(glob.glob(os.path.join(path, '*')))
+                if glob.glob(os.path.join(d, 'obj*.ply'))]
+    if not captures:
+        raise SystemExit(f'No obj*.ply found in {path} or any of its subfolders')
+    return captures[-1]
 
 
 def preprocess(path, plane, args, rng):
@@ -79,22 +97,24 @@ def main():
     parser.add_argument('--merge-grid', type=int, default=5, help='exponent grid used in the search')
     parser.add_argument('--merge-cap', type=int, default=192, help='points per group during the search')
     parser.add_argument('--resolution', type=int, default=20)
+    parser.add_argument('--export', help='write the fitted meshes and segmented clouds as PLY here')
     parser.add_argument('--viser', action='store_true')
     args = parser.parse_args()
 
-    snapshot_dir = os.path.join(REPO_ROOT, args.snapshot)
-    ply_files = sorted(glob.glob(os.path.join(snapshot_dir, '*_obj*.ply')))
+    snapshot_dir = resolve_snapshot(os.path.join(REPO_ROOT, args.snapshot))
+    ply_files = sorted(glob.glob(os.path.join(snapshot_dir, 'obj*.ply')))
     if not ply_files:
-        raise SystemExit(f'No *_obj*.ply found in {snapshot_dir}')
+        raise SystemExit(f'No obj*.ply found in {snapshot_dir}')
+    print(f'Snapshot: {snapshot_dir}')
 
     plane = None
-    plane_files = sorted(glob.glob(os.path.join(snapshot_dir, '*_plane.npz')))
-    if plane_files:
-        data = np.load(plane_files[-1])
+    plane_file = os.path.join(snapshot_dir, 'plane.npz')
+    if os.path.exists(plane_file):
+        data = np.load(plane_file)
         plane = (data['normal'], float(data['offset']))
         print(f'Plane: normal={plane[0].round(3)} offset={plane[1]:.3f}')
     elif args.canonical:
-        raise SystemExit('--canonical need a *_plane.npz in the snapshot folder')
+        raise SystemExit(f'--canonical needs a plane.npz in {snapshot_dir}')
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model = load_model(os.path.join(REPO_ROOT, args.checkpoint_dir), device, args.lm)
@@ -135,6 +155,9 @@ def main():
     print(f'\n{"object":>28s}  {"recon error":>13s}')
     for name, error, scale in zip(names, errors, scales):
         print(f'{name:>28s}  {error * scale * 1000:10.2f} mm')
+
+    if args.export:
+        export(handler, names, os.path.join(REPO_ROOT, args.export), args.resolution)
 
     if args.viser:
         show(handler, args.resolution)
@@ -183,6 +206,20 @@ def report(handler, names):
     print('visible surface; >0.35 means the primitives actually have volume.')
     print('eps_prof / eps_sect = superquadric exponents. ~0.1 is a sharp box edge, ~1.0 is')
     print('round. A cylinder wants eps_prof~0.1 with eps_sect~1.0; a cube wants both ~0.1.')
+
+
+def export(handler, names, out_dir, resolution):
+    """PLY pair per object so the fit can be inspected on a machine that has a display."""
+    from superdec.utils.visualizations import export_mesh_trimesh, export_o3d_pc
+
+    os.makedirs(out_dir, exist_ok=True)
+    meshes, pcs = handler.get_meshes(resolution=resolution), handler.get_segmented_pcs()
+    for name, mesh, pc in zip(names, meshes, pcs):
+        stem = os.path.splitext(name)[0]
+        if mesh is not None:
+            export_mesh_trimesh(mesh, os.path.join(out_dir, f'{stem}_sq.ply'))
+        export_o3d_pc(pc, os.path.join(out_dir, f'{stem}_seg.ply'))
+    print(f'\nExported {len(names)} mesh/cloud pairs to {out_dir}')
 
 
 def show(handler, resolution):

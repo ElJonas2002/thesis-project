@@ -33,7 +33,7 @@ albumentations>=2.0.8
 # --- Vision / numerics ---
 numpy>=2.0
 opencv-python>=5.0.0
-scipy>=1.18
+scipy
 pandas>=3.0
 pillow>=12.0
 tqdm>=4.66
