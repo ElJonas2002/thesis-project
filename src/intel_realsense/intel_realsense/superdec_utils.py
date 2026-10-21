@@ -7,15 +7,20 @@ measure changes here before they reach the robot.
 """
 import os
 import sys
+import warnings
 import cv2 as cv
 import numpy as np
 import torch
 
+# Number of points to sample for the SuperDec network. 
+# More or less points will be randomly sampled from the input point cloud.
 N_POINTS = 4096
 
 
 def add_superdec_to_path(root):
-    """The repo folder `superdec/` shadows the package of the same name, so its parent wins."""
+    """
+    The repo folder `superdec/` shadows the package of the same name, so its parent wins.
+    """
     root = os.path.abspath(root)
     if root not in sys.path:
         sys.path.insert(0, root)
@@ -23,18 +28,29 @@ def add_superdec_to_path(root):
 
 
 def load_model(checkpoint_dir, device, lm_optimization=False):
+    """
+    `lm_optimization` runs LM inside the network forward, i.e. before the merge, which then
+    discards it; use `lm_stage` to refine the merged primitives instead.
+    """
     from omegaconf import OmegaConf
     from superdec.superdec import SuperDec
 
-    config = OmegaConf.load(os.path.join(checkpoint_dir, 'config.yaml'))
-    checkpoint = torch.load(os.path.join(checkpoint_dir, 'ckpt.pt'),
-                            map_location=device, weights_only=False)
+    config_path = os.path.join(checkpoint_dir, 'config.yaml')
+    checkpoint_path = os.path.join(checkpoint_dir, 'ckpt.pt')
+
+    # Close configs path as it is no longer needed after loading
+    with open(config_path) as f:
+        config = OmegaConf.load(f)
+
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     model = SuperDec(config.superdec).to(device)
     model.load_state_dict(checkpoint['model_state_dict'])
+    model.lm_optimization = lm_optimization
+
     if lm_optimization:
         from superdec.lm_optimization.lm_optimizer import LMOptimizer
         model.lm_optimizer = LMOptimizer()
-        model.lm_optimization = True
+
     model.eval()
     return model
 
@@ -70,24 +86,37 @@ def complete_shell(points, normal, offset, rng, grid=64, floor_ratio=0.3, wall_r
     height = np.maximum(points @ up + offset, 0.0)
     uv = points @ plane_axes.T
 
+    # 3. Create a grid x grid mesh covering the UV plane of the points.
     lo = uv.min(axis=0)
     span = np.maximum(uv.max(axis=0) - lo, 1e-6)
     cell = np.clip(((uv - lo) / span * (grid - 1)).astype(np.int32), 0, grid - 1)
 
+    # 4. Compute a height map: maximum height of each cell
     hmap = np.zeros((grid, grid), np.float32)
     np.maximum.at(hmap, (cell[:, 1], cell[:, 0]), height.astype(np.float32))
 
-    # Square structuring elements would square off round silhouettes.
+    # 5. Use ellipse kernel to avoid squaring off round silhouettes.
     round3 = cv.getStructuringElement(cv.MORPH_ELLIPSE, (3, 3))
     occupied = cv.morphologyEx((hmap > 0).astype(np.uint8), cv.MORPH_CLOSE, round3)
     hmap = cv.dilate(hmap, round3)
 
     def to_3d(rows, cols, heights):
-        # Jitter inside the cell so the raster grid does not show up as stair steps.
+        """
+        Convert 2D grid coordinates and heights back to 3D points with a small jitter inside each cell 
+        so that the raster grid does not show up as stair steps.
+        Args:
+            rows (np.ndarray): Row indices of the occupied cells.
+            cols (np.ndarray): Column indices of the occupied cells.
+            heights (np.ndarray): Heights corresponding to each cell.
+
+        Returns:
+            np.ndarray: 3D points reconstructed from the 2D grid and heights.
+        """
         jitter = rng.uniform(-0.5, 0.5, (rows.shape[0], 2))
         centres = (np.stack([cols, rows], axis=1) + jitter) / (grid - 1) * span + lo
         return centres @ plane_axes + np.outer(heights - offset, up)
 
+    # 6. Sample points from the occupied floor and wall cells to reconstruct the 3D scene.s
     rows, cols = np.nonzero(occupied)
     if rows.size == 0:
         return points
@@ -115,6 +144,7 @@ def uniform_resample(points, target=N_POINTS):
     face ends up wearing several stacked slabs.
     """
     import open3d as o3d
+
     pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(points))
     diag = np.linalg.norm(points.max(axis=0) - points.min(axis=0))
 
@@ -134,8 +164,11 @@ def uniform_resample(points, target=N_POINTS):
 
 
 def denoise(points, neighbours=20, std_ratio=2.0):
-    """Statistical outlier removal; a single flying pixel corrupts the whole normalisation."""
+    """
+    Statistical outlier removal; a single flying pixel corrupts the whole normalisation.
+    """
     import open3d as o3d
+
     pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(points))
     kept, _ = pc.remove_statistical_outlier(nb_neighbors=neighbours, std_ratio=std_ratio)
     kept = np.asarray(kept.points)
@@ -143,6 +176,9 @@ def denoise(points, neighbours=20, std_ratio=2.0):
 
 
 def normalize_points(points):
+    """
+    Normalize points to fit within a unit cube centered at the origin.
+    """
     translation = points.mean(0)
     points = points - translation
     scale = 2.0 * np.max(np.abs(points))
@@ -153,7 +189,16 @@ def radial_distance(local, extent, e_prof, e_sect):
     """
     Solina-Bajcsy radial distance, evaluated in log space.
 
-    The 1/epsilon exponents reach 1/0.1 = 10 and overflow to NaN if the powers are direct.
+    Why log space?: The 1/epsilon exponents reach 1/0.1 = 10 and overflow to NaN if the powers are direct.
+
+    Args:
+        local (torch.Tensor): Local coordinates of points relative to the superquadric center.
+        extent (torch.Tensor): Extent of the superquadric along each axis.
+        e_prof (float): Profile exponent of the superquadric ($\varepsilon_{1}$).
+        e_sect (float): Section exponent of the superquadric ($\varepsilon_{2}$).
+    Returns:
+        Radial distance of each point from the superquadric surface.
+
     """
     logs = 2.0 * torch.log((local / extent).abs().clamp_min(1e-9))
     log_xy = (e_sect / e_prof) * torch.logaddexp(logs[..., 0] / e_sect, logs[..., 1] / e_sect)
@@ -292,17 +337,74 @@ def merge_stage(x, out, rng, tol=1.15, grid=5, cap=192):
     return {k: v.to(x.device) for k, v in merged.items()}
 
 
+def primitive_errors(x, out):
+    """Mean radial distance of each primitive to the points assigned to it, (B, P); NaN if none."""
+    assign = out['assign_matrix']
+    hard = torch.nn.functional.one_hot(assign.argmax(-1), assign.shape[-1])
+    hard = (hard * (assign.sum(-1, keepdim=True) > 0)).transpose(1, 2).float()
+
+    local = torch.einsum('bpji,bpnj->bpni', out['rotate'], x[:, None] - out['trans'][:, :, None])
+    shape = out['shape'][:, :, None]
+    dist = radial_distance(local, out['scale'][:, :, None], shape[..., 0], shape[..., 1])
+
+    count = hard.sum(-1)
+    error = (dist * hard).sum(-1) / count.clamp_min(1.0)
+    return error.masked_fill(count == 0, float('nan'))
+
+
+LM_SHAPE_MARGIN = 1e-3
+
+
+def lm_stage(x, out, steps=5):
+    """
+    Levenberg-Marquardt refinement of the merged primitives, kept per primitive only if it helps.
+
+    LM seeds its exponents with logit((eps - 0.1) / 1.8); the merge grid emits exactly 0.1 and
+    1.9, which map to -inf/+inf, hence the clamp. A primitive keeps the LM result only if it is
+    finite and lowers the radial error on its own points, so LM can never make a fit worse.
+    LMOptimizer hard-codes `.cuda()`, so `x` must live on a CUDA device.
+    """
+    from superdec.lm_optimization.lm_optimizer import LMOptimizer
+
+    alive = out['exist'][..., 0] > 0.5
+    before = primitive_errors(x, out)
+    if steps < 1 or not alive.any():
+        return out, {'accepted': 0, 'alive': int(alive.sum()), 'before': before, 'after': before}
+    if x.device.type != 'cuda':
+        raise RuntimeError('LMOptimizer only runs on CUDA')
+
+    seed = {k: v.clone() for k, v in out.items()}
+    seed['shape'] = seed['shape'].clamp(0.1 + LM_SHAPE_MARGIN, 1.9 - LM_SHAPE_MARGIN)
+    optimizer = LMOptimizer()
+    optimizer.num_steps = steps
+    refined = optimizer(seed, x)
+
+    keys = ('scale', 'shape', 'rotate', 'trans')
+    refined = {k: refined[k].to(out[k].dtype) for k in keys}
+    finite = torch.stack([refined[k].flatten(2).isfinite().all(-1) for k in keys]).all(0)
+    after = primitive_errors(x, {**out, **refined})
+    accept = alive & finite & after.isfinite() & (after < before)
+
+    result = dict(out)
+    for k in keys:
+        mask = accept.view(*accept.shape, *([1] * (out[k].dim() - 2)))
+        result[k] = torch.where(mask, refined[k], out[k])
+    stats = {'accepted': int(accept.sum()), 'alive': int(alive.sum()),
+             'before': before, 'after': torch.where(accept, after, before)}
+    return result, stats
+
+
 class SuperDecRunner:
     """
     Point clouds in, superquadrics out, in the frame the clouds arrived in.
 
-    Defaults are the configuration adopted in EXPERIMENTS.md: denoise + complete + canonical
-    + uniform, followed by the closed-form merge.
+    Defaults: denoise + complete + canonical + uniform, followed by the closed-form merge.
+    `lm=True` adds a guarded Levenberg-Marquardt refinement after the merge (CUDA only).
     """
 
     def __init__(self, superdec_root, checkpoint_dir, device=None, denoise=True,
                  complete=True, canonical=True, uniform=True, merge=True, merge_tol=1.15,
-                 merge_grid=5, merge_cap=192, seed=0):
+                 merge_grid=5, merge_cap=192, lm=False, lm_steps=5, seed=0):
         add_superdec_to_path(superdec_root)
         self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = load_model(checkpoint_dir, self.device)
@@ -314,6 +416,11 @@ class SuperDecRunner:
         self.merge_tol = merge_tol
         self.merge_grid = merge_grid
         self.merge_cap = merge_cap
+        self.lm = lm and torch.device(self.device).type == 'cuda'
+        if lm and not self.lm:
+            warnings.warn('LM refinement needs CUDA; disabled on ' + str(self.device))
+        self.lm_steps = lm_steps
+        self.last_lm_stats = None
         self.rng = np.random.default_rng(seed)
 
     def prepare(self, points, plane, frame):
@@ -345,6 +452,8 @@ class SuperDecRunner:
         out = {k: v for k, v in out.items() if isinstance(v, torch.Tensor)}
         if self.merge:
             out = merge_stage(x, out, self.rng, self.merge_tol, self.merge_grid, self.merge_cap)
+        if self.lm:
+            out, self.last_lm_stats = lm_stage(x, out, self.lm_steps)
 
         scale = np.asarray(scales)[:, None]
         results = []

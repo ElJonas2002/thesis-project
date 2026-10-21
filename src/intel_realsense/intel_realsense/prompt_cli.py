@@ -6,9 +6,11 @@ import tty
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
+from std_srvs.srv import Trigger
 from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 
 FASTSAM_TOPIC = '/fastsam_node/prompt'
+CAPTURE_SERVICE = '/fastsam_node/capture'
 PROMPT_QOS = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                         durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
@@ -17,9 +19,11 @@ class PromptCLI(Node):
     def __init__(self):
         super().__init__('prompt_cli')
         self.prompt_pub = self.create_publisher(String, FASTSAM_TOPIC, PROMPT_QOS)
+        self.capture_cli = self.create_client(Trigger, CAPTURE_SERVICE)
         self.get_logger().info(f"=== PromptCLI for FastSAM publishing on {FASTSAM_TOPIC} ===")
         self.get_logger().info("    - Press 't' to write a prompt (comma-separated terms).")
         self.get_logger().info("    - Press 'c' to segment all objects in the scene.")
+        self.get_logger().info("    - Press 's' to save RGB, depth, RANSAC-filtered and mask images.")
         self.get_logger().info("    - Press 'q' to quit.")
 
     def publish_prompt(self, prompt: str):
@@ -27,6 +31,23 @@ class PromptCLI(Node):
         msg.data = prompt
         self.prompt_pub.publish(msg)
         self.get_logger().info(f"Published prompt: {prompt if prompt else '(segment everything)'}")
+
+    def request_capture(self):
+        if not self.capture_cli.service_is_ready():
+            self.get_logger().warn(f"{CAPTURE_SERVICE} is not available; is fastsam_node running?")
+            return
+        # Async so the keyboard loop keeps spinning; the reply is logged when it arrives.
+        future = self.capture_cli.call_async(Trigger.Request())
+        future.add_done_callback(self.on_capture_done)
+
+    def on_capture_done(self, future):
+        result = future.result()
+        if result is None:
+            self.get_logger().error("Capture request failed.")
+        elif result.success:
+            self.get_logger().info(result.message)
+        else:
+            self.get_logger().warn(result.message)
 
     def run_keyboard(self):
         fd = sys.stdin.fileno()
@@ -48,6 +69,8 @@ class PromptCLI(Node):
                     tty.setcbreak(fd)
                 elif key == 'c':
                     self.publish_prompt('')
+                elif key == 's':
+                    self.request_capture()
                 elif key == 'q':
                     return
         finally:

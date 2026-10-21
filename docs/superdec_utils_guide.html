@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>superdec_utils.py: plain-English guide</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --card: #ffffff; --ink: #1f2328; --muted: #5b636d; --line: #dfe2e6;
+    --accent: #2f6fde; --green: #1a7f37; --green-bg: #e6f4ea; --amber: #9a6700; --amber-bg: #fff4d6;
+    --red: #b42318; --red-bg: #fde8e7; --code-bg: #f1f3f5;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink); background: var(--bg); }
+  nav { position: fixed; top: 0; left: 0; bottom: 0; width: 260px; overflow-y: auto; background: #fff; border-right: 1px solid var(--line); padding: 18px 14px; font-size: 14px; }
+  nav h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 18px 0 6px; }
+  nav a { display: block; padding: 3px 8px; color: var(--ink); text-decoration: none; border-radius: 6px; }
+  nav a:hover { background: var(--code-bg); }
+  nav a code { font-size: 12.5px; }
+  main { margin-left: 260px; padding: 32px 48px 80px; max-width: 1100px; }
+  h1 { font-size: 30px; margin: 0 0 6px; }
+  h2.section { margin-top: 56px; padding-bottom: 6px; border-bottom: 2px solid var(--line); }
+  h3 { margin: 0 0 4px; font-size: 21px; }
+  h4 { margin: 18px 0 6px; font-size: 15px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 14px; }
+  code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+  pre { background: #0f1720; color: #e6edf3; padding: 14px 16px; border-radius: 8px; overflow-x: auto; line-height: 1.45; }
+  pre code { background: none; padding: 0; color: inherit; }
+  .lead { font-size: 18px; color: var(--muted); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 22px 26px; margin: 22px 0; box-shadow: 0 1px 2px rgba(0,0,0,.03); }
+  .where { color: var(--muted); font-size: 14px; margin-bottom: 10px; }
+  .oneliner { font-size: 17px; background: #eef4ff; border-left: 4px solid var(--accent); padding: 10px 14px; border-radius: 6px; margin: 10px 0 14px; }
+  .analogy { font-style: italic; color: #3d4652; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0 6px; font-size: 14.5px; }
+  th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); font-weight: 600; }
+  .badge { display: inline-block; font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+  .safe { color: var(--green); background: var(--green-bg); }
+  .care { color: var(--amber); background: var(--amber-bg); }
+  .dont { color: var(--red); background: var(--red-bg); }
+  .note { border-left: 4px solid var(--amber); background: var(--amber-bg); padding: 10px 14px; border-radius: 6px; margin: 12px 0; }
+  .warn { border-left: 4px solid var(--red); background: var(--red-bg); padding: 10px 14px; border-radius: 6px; margin: 12px 0; }
+  .tip  { border-left: 4px solid var(--green); background: var(--green-bg); padding: 10px 14px; border-radius: 6px; margin: 12px 0; }
+  ol li, ul li { margin: 4px 0; }
+  details { margin: 10px 0; }
+  summary { cursor: pointer; color: var(--accent); font-weight: 600; }
+  /* pipeline diagram */
+  .flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0; margin: 18px 0; }
+  .flow .step { flex: 1 1 120px; min-width: 120px; background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 10px; text-align: center; font-size: 13.5px; text-decoration: none; color: var(--ink); }
+  .flow .step:hover { border-color: var(--accent); }
+  .flow .step b { display: block; font-size: 14px; margin-bottom: 3px; }
+  .flow .arrow { align-self: center; padding: 0 6px; color: var(--muted); font-size: 20px; }
+  .flow .grp-pre  { border-top: 4px solid #7c3aed; }
+  .flow .grp-net  { border-top: 4px solid #0ea5e9; }
+  .flow .grp-mrg  { border-top: 4px solid #f59e0b; }
+  .flow .grp-lm   { border-top: 4px solid #10b981; }
+  .flow .grp-out  { border-top: 4px solid #64748b; }
+  .legend span { display: inline-block; margin-right: 16px; font-size: 13px; }
+  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 900px) { nav { display: none; } main { margin-left: 0; padding: 20px; } .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<nav>
+  <strong>superdec_utils.py guide</strong>
+  <h2>Start here</h2>
+  <a href="#big-picture">The big picture</a>
+  <a href="#glossary">Words you need</a>
+  <a href="#symptoms">"I want to fix X"</a>
+  <a href="#all-knobs">All knobs at a glance</a>
+  <a href="#testing">How to test a change</a>
+  <h2>Setup</h2>
+  <a href="#n_points"><code>N_POINTS</code></a>
+  <a href="#add_superdec_to_path"><code>add_superdec_to_path</code></a>
+  <a href="#load_model"><code>load_model</code></a>
+  <h2>1 · Preprocessing</h2>
+  <a href="#denoise"><code>denoise</code></a>
+  <a href="#complete_shell"><code>complete_shell</code></a>
+  <a href="#canonical_rotation"><code>canonical_rotation</code></a>
+  <a href="#uniform_resample"><code>uniform_resample</code></a>
+  <a href="#normalize_points"><code>normalize_points</code></a>
+  <h2>2 · Merging</h2>
+  <a href="#radial_distance"><code>radial_distance</code></a>
+  <a href="#fit_groups"><code>fit_groups</code></a>
+  <a href="#stack_groups"><code>stack_groups</code></a>
+  <a href="#merge_object"><code>merge_object</code></a>
+  <a href="#merge_stage"><code>merge_stage</code></a>
+  <h2>3 · Refinement</h2>
+  <a href="#primitive_errors"><code>primitive_errors</code></a>
+  <a href="#lm_stage"><code>lm_stage</code></a>
+  <h2>4 · Glue</h2>
+  <a href="#runner"><code>SuperDecRunner</code></a>
+</nav>
+
+<main>
+
+<h1>superdec_utils.py: plain-English guide</h1>
+<p class="lead">What every function does, the order it runs in, and which numbers you can safely change.
+File: <code>src/intel_realsense/intel_realsense/superdec_utils.py</code> (line numbers below refer to it).</p>
+
+<p>
+  <span class="badge safe">SAFE TO TUNE</span> Change it freely, then benchmark. &nbsp;
+  <span class="badge care">TRY CAREFULLY</span> Can help, but has side effects. Always benchmark. &nbsp;
+  <span class="badge dont">LEAVE ALONE</span> Must match how the network was trained, or the math depends on it.
+</p>
+
+<!-- ============================================================ -->
+<h2 class="section" id="big-picture">The big picture</h2>
+
+<p>This file takes <b>one object's point cloud</b> (from <code>fastsam_node</code>) and turns it into
+<b>a few superquadrics</b> (rounded boxes / cylinders / ellipsoids) that describe the object's shape.
+Both the ROS node (<code>superdec_node.py</code>) and the offline bench (<code>scripts/superdec_offline.py</code>)
+use this file, so any change here affects both.</p>
+
+<div class="flow">
+  <a class="step grp-pre" href="#denoise"><b>denoise</b>remove stray points</a><span class="arrow">→</span>
+  <a class="step grp-pre" href="#complete_shell"><b>complete_shell</b>add fake bottom + sides</a><span class="arrow">→</span>
+  <a class="step grp-pre" href="#canonical_rotation"><b>canonical_rotation</b>make table = floor (+Y up)</a><span class="arrow">→</span>
+  <a class="step grp-pre" href="#uniform_resample"><b>uniform_resample</b>even out point density</a><span class="arrow">→</span>
+  <a class="step grp-pre" href="#normalize_points"><b>pick 4096 + normalize</b>centre and shrink to unit size</a>
+</div>
+<div class="flow">
+  <a class="step grp-net" href="#load_model"><b>SuperDec network</b>splits points into parts + guesses shapes</a><span class="arrow">→</span>
+  <a class="step grp-mrg" href="#merge_stage"><b>merge_stage</b>glue parts one shape can cover, refit</a><span class="arrow">→</span>
+  <a class="step grp-lm" href="#lm_stage"><b>lm_stage</b> (optional)polish each shape</a><span class="arrow">→</span>
+  <a class="step grp-out" href="#runner"><b>undo normalize + rotation</b>back to camera frame, in metres</a>
+</div>
+<p class="legend">
+  <span><i style="background:#7c3aed"></i>Preprocessing</span>
+  <span><i style="background:#0ea5e9"></i>Neural network</span>
+  <span><i style="background:#f59e0b"></i>Merging</span>
+  <span><i style="background:#10b981"></i>Refinement</span>
+  <span><i style="background:#64748b"></i>Output</span>
+</p>
+
+<div class="card">
+  <b>The whole story in 5 sentences.</b>
+  <ol>
+    <li>The camera sees only one side of the object, and the cloud has noise. <b>Preprocessing</b> cleans the cloud and makes it look like the training data: a closed surface, with the table as the floor and points spread evenly.</li>
+    <li>The cloud is shrunk to fit inside a unit cube, because the network was trained on objects that size.</li>
+    <li>The <b>SuperDec network</b> decides which point belongs to which part. It usually cuts the object into too many parts.</li>
+    <li>The <b>merge</b> keeps the network's point-to-part decisions but ignores its shapes. It refits each part with a fast formula and keeps gluing pairs of parts that one shape can still cover.</li>
+    <li>Optionally <b>LM</b> polishes each shape. The results are then scaled and rotated back into the camera frame.</li>
+  </ol>
+</div>
+
+<!-- ============================================================ -->
+<h2 class="section" id="glossary">Words you need</h2>
+<table>
+  <tr><th style="width:200px">Word</th><th>Meaning in this file</th></tr>
+  <tr><td>Point cloud</td><td>A list of 3D points <code>(N, 3)</code>, here one object segmented by FastSAM.</td></tr>
+  <tr><td>Superquadric (SQ)</td><td>A shape described by 11 numbers: 3 sizes (<code>scale</code>), 2 roundness exponents (<code>shape</code>), 3×3 orientation (<code>rotate</code>), and centre (<code>trans</code>).</td></tr>
+  <tr><td>Exponents ε₁ / ε₂<br>(<code>e_prof</code> / <code>e_sect</code>)</td><td>Roundness. <b>≈0.1 = sharp box corner</b>, <b>1 = round</b>, <b>≈1.9 = pinched diamond</b>.
+      ε₂ (section) controls the shape seen from above, in the local x-y plane. ε₁ (profile) controls the shape along local z.
+      Cylinder: ε₁≈0.1, ε₂≈1. Box: both ≈0.1. Ball: both ≈1.</td></tr>
+  <tr><td>Group / part / primitive</td><td>A set of points that one SQ is supposed to explain.</td></tr>
+  <tr><td>Residual / score / error</td><td>The average distance from a group's points to its SQ's surface. Lower is better.</td></tr>
+  <tr><td>Radial distance</td><td>How far a point is from the surface, measured along the line from the SQ's centre through the point. See <a href="#radial_distance"><code>radial_distance</code></a>.</td></tr>
+  <tr><td>PCA / eigenvectors</td><td>A quick way to find the three main directions of a group of points: the longest direction, the next one, and the thinnest one. Used here as the SQ orientation.</td></tr>
+  <tr><td>Batch, padding, mask</td><td>The GPU works on equal-sized arrays. Smaller groups are filled with dummy points (padding), and a True/False <i>mask</i> marks which points are real.</td></tr>
+  <tr><td>Normalized space</td><td>Coordinates after centring and shrinking the object into a cube from -0.5 to 0.5. The network, merge and LM all work in this space; distances there are fractions of the object's size, not metres.</td></tr>
+  <tr><td><code>assign_matrix</code></td><td>Network output: for each point, how strongly it belongs to each primitive slot. The highest value wins.</td></tr>
+  <tr><td><code>exist</code></td><td>Network output: probability that a primitive slot is used. Above 0.5 counts as "alive".</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 class="section" id="symptoms">"I want to fix X". Where do I look?</h2>
+<table>
+  <tr><th style="width:32%">What you see</th><th>Try first</th><th>Then</th></tr>
+  <tr><td>Too many pieces on a simple object (box made of slabs)</td>
+      <td><span class="badge safe">SAFE</span> Raise <code>merge_tol</code> (1.15 → 1.25 → 1.4)</td>
+      <td>Check that <code>uniform</code> and <code>complete</code> are on. Both reduce stacked slabs at the source.</td></tr>
+  <tr><td>Different parts glued into one blob (mug handle merged into body)</td>
+      <td><span class="badge safe">SAFE</span> Lower <code>merge_tol</code> (1.15 → 1.08)</td>
+      <td><span class="badge care">CAREFUL</span> Change how <code>base</code> is computed in <a href="#merge_object"><code>merge_object</code></a>.</td></tr>
+  <tr><td>Shapes are too big / puffed out by stray points</td>
+      <td><span class="badge safe">SAFE</span> <a href="#denoise"><code>denoise</code></a>: lower <code>std_ratio</code> (2.0 → 1.5)</td>
+      <td><span class="badge care">CAREFUL</span> Add smaller values to <code>shrinks</code> in <a href="#fit_groups"><code>fit_groups</code></a>, e.g. 0.75.</td></tr>
+  <tr><td>Roundness looks wrong (cylinder looks like a box, or the reverse)</td>
+      <td><span class="badge safe">SAFE</span> Raise <code>merge_grid</code> (5 → 7). The final refit then tries 17 values instead of 13.</td>
+      <td><span class="badge care">CAREFUL</span> Narrow the exponent range in <code>fit_groups</code> (line 239). Also try <code>lm=True</code>.</td></tr>
+  <tr><td>Bottom of the object missing / shape floats above the table</td>
+      <td>Check that <code>plane.npz</code> or the plane topic is valid. <code>complete</code> and <code>canonical</code> need it.</td>
+      <td><span class="badge care">CAREFUL</span> <a href="#complete_shell"><code>complete_shell</code></a>: <code>floor_ratio</code>, <code>wall_ratio</code>, <code>grid</code>.</td></tr>
+  <tr><td>Small real parts disappear</td>
+      <td><span class="badge care">CAREFUL</span> Lower the 32-point minimum in <a href="#merge_stage"><code>merge_stage</code></a> (line 317).</td>
+      <td>Lower <code>merge_tol</code>.</td></tr>
+  <tr><td>Too slow</td>
+      <td><span class="badge safe">SAFE</span> Lower <code>merge_cap</code> (192 → 128), keep <code>merge_grid</code> = 5, turn <code>lm</code> off.</td>
+      <td>Lower the node's <code>max_instances</code>.</td></tr>
+  <tr><td>Results change slightly between runs</td>
+      <td>Expected: the merge picks a random subset of points (<code>stack_groups</code>).</td>
+      <td>Raise <code>merge_cap</code> for more stable decisions. The <code>seed</code> fixes randomness only per process.</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 class="section" id="all-knobs">All knobs at a glance</h2>
+<p>"Exposed" means you can change it without editing code: a ROS parameter on <code>superdec_node</code> or a flag on the bench.
+Everything else is a default in the code, so you edit the number in the file.</p>
+<table>
+  <tr><th>Knob</th><th>Where</th><th>Default</th><th>Exposed?</th><th>Risk</th></tr>
+  <tr><td><code>denoise</code> / <code>complete</code> / <code>canonical</code> / <code>uniform</code> / <code>merge</code></td><td>SuperDecRunner</td><td>all on</td><td>ROS param + bench flag</td><td><span class="badge safe">SAFE</span></td></tr>
+  <tr><td><code>merge_tol</code></td><td>merge_object</td><td>1.15</td><td>ROS + bench</td><td><span class="badge safe">SAFE</span></td></tr>
+  <tr><td><code>merge_grid</code></td><td>fit_groups (search)</td><td>5</td><td>ROS + bench</td><td><span class="badge safe">SAFE</span></td></tr>
+  <tr><td><code>merge_cap</code></td><td>stack_groups</td><td>192</td><td>ROS + bench</td><td><span class="badge safe">SAFE</span></td></tr>
+  <tr><td><code>lm</code> / <code>lm_steps</code></td><td>lm_stage</td><td>off / 5</td><td>ROS + bench</td><td><span class="badge safe">SAFE</span></td></tr>
+  <tr><td><code>neighbours</code>, <code>std_ratio</code></td><td>denoise, line 166</td><td>20, 2.0</td><td>no</td><td><span class="badge safe">SAFE</span></td></tr>
+  <tr><td><code>grid</code>, <code>floor_ratio</code>, <code>wall_ratio</code></td><td>complete_shell, line 72</td><td>64, 0.3, 0.6</td><td>no</td><td><span class="badge care">CAREFUL</span></td></tr>
+  <tr><td>density target <code>1.3 * target</code>, voxel bounds <code>diag/400</code>, <code>diag/8</code></td><td>uniform_resample, lines 151, 161</td><td>1.3, /400, /8</td><td>no</td><td><span class="badge care">CAREFUL</span></td></tr>
+  <tr><td><code>shrinks</code></td><td>fit_groups, line 209</td><td>(0.85, 0.95, 1.0)</td><td>no</td><td><span class="badge care">CAREFUL</span></td></tr>
+  <tr><td>exponent range <code>linspace(0.1, 1.9, grid)</code></td><td>fit_groups, line 239</td><td>0.1 to 1.9</td><td>no</td><td><span class="badge care">CAREFUL</span> (stay inside 0.1 to 1.9)</td></tr>
+  <tr><td><code>budget</code></td><td>fit_groups</td><td>4,000,000</td><td>no</td><td><span class="badge safe">SAFE</span> (memory/speed only)</td></tr>
+  <tr><td>minimum group size <code>32</code></td><td>merge_stage, line 317</td><td>32 points</td><td>no</td><td><span class="badge care">CAREFUL</span></td></tr>
+  <tr><td>alive threshold <code>exist &gt; 0.5</code></td><td>merge_stage, line 311</td><td>0.5</td><td>no</td><td><span class="badge care">CAREFUL</span></td></tr>
+  <tr><td>final refit <code>4 * cap</code>, <code>2 * grid + 3</code></td><td>merge_stage, lines 330 and 331</td><td>768 pts, 13 values</td><td>no</td><td><span class="badge safe">SAFE</span></td></tr>
+  <tr><td><code>LM_SHAPE_MARGIN</code></td><td>line 355</td><td>1e-3</td><td>no</td><td><span class="badge dont">LEAVE</span></td></tr>
+  <tr><td><code>N_POINTS</code></td><td>line 17</td><td>4096</td><td>no</td><td><span class="badge dont">LEAVE</span></td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 class="section" id="testing">How to test a change (do this every time)</h2>
+<ol>
+  <li><b>Capture a scene once</b> (with the pipeline running):
+<pre><code>ros2 service call /fastsam_node/snapshot std_srvs/srv/Trigger
+# writes snapshots/&lt;timestamp&gt;/objNN.ply + plane.npz</code></pre></li>
+  <li><b>Run the bench with the same settings as the node.</b> The bench flags are <b>off by default</b>, while the node has them <b>on</b>, so pass them all:
+<pre><code>python scripts/superdec_offline.py --denoise --complete --canonical --uniform --merge \
+       --export exports/my_test_01
+# add --merge-tol 1.25 / --merge-grid 7 / --merge-cap 128 / --lm to compare</code></pre></li>
+  <li><b>Read the numbers it prints:</b>
+    <ul>
+      <li><code>#sq</code>: how many superquadrics each object got. Fewer is usually better, if the error stays low.</li>
+      <li><code>recon error</code> (mm): average distance from points to the closest surface. Lower is better.</li>
+      <li><code>flatness</code>: below 0.15 means flat slabs glued onto the visible face (bad). Above 0.35 means the shapes have real volume (good).</li>
+      <li><code>eps_prof / eps_sect</code>: average roundness.</li>
+      <li><code>merge: X s</code>: how long the merge took.</li>
+    </ul></li>
+  <li><b>Look at it:</b> open <code>exports/my_test_01/*_sq.ply</code> (shapes) and <code>*_seg.ply</code> (points coloured by part), or use <code>--viser</code>.</li>
+  <li><b>Write it down</b> in <code>docs/PROJECT_LOGBOOK.md</code>.</li>
+  <li><b>Ship it to the robot:</b> the node runs the <i>installed</i> copy, not <code>src/</code>. Rebuild:
+<pre><code>colcon build --packages-select intel_realsense &amp;&amp; source install/setup.bash
+ros2 run intel_realsense superdec_node --ros-args -p merge_tol:=1.25   # override params at start</code></pre></li>
+</ol>
+<div class="warn"><b>Two traps.</b>
+  <ol>
+    <li>The bench has its own copy of the preprocessing order (<code>preprocess()</code> in <code>superdec_offline.py</code>). If you change the order or add a step in <a href="#runner"><code>SuperDecRunner.prepare</code></a>, change the bench too, or you will be measuring something different from what the robot runs.</li>
+    <li>When this guide was written, the copy in <code>install/</code> was older than <code>src/</code>. Rebuild before trusting what the robot shows.</li>
+  </ol>
+</div>
+
+<!-- ============================================================ -->
+<h2 class="section">Setup</h2>
+
+<div class="card" id="n_points">
+  <h3><code>N_POINTS = 4096</code></h3>
+  <div class="where">line 17 · <span class="badge dont">LEAVE ALONE</span></div>
+  <div class="oneliner">The exact number of points fed to the network for each object.</div>
+  <p>Whatever size the cloud has after preprocessing, exactly 4096 points are picked at random. If there are fewer, some are repeated. The network was trained with 4096, so a different number changes what it sees and can quietly hurt quality.</p>
+</div>
+
+<div class="card" id="add_superdec_to_path">
+  <h3><code>add_superdec_to_path(root)</code></h3>
+  <div class="where">line 20 · <span class="badge dont">LEAVE ALONE</span> (plumbing)</div>
+  <div class="oneliner">Makes <code>import superdec</code> find the SuperDec code inside the repo.</div>
+  <p>The repo has a folder called <code>superdec/</code> containing a package also called <code>superdec</code>. Adding the outer folder to the front of Python's search path makes sure the right one is imported.</p>
+</div>
+
+<div class="card" id="load_model">
+  <h3><code>load_model(checkpoint_dir, device, lm_optimization=False)</code></h3>
+  <div class="where">line 30 · <span class="badge dont">LEAVE ALONE</span></div>
+  <div class="oneliner">Reads <code>config.yaml</code> and <code>ckpt.pt</code>, builds the SuperDec network, and puts it in inference mode.</div>
+  <p><b>What the network returns</b> for each object: a fixed number of primitive "slots", each with <code>scale</code>, <code>shape</code>, <code>rotate</code>, <code>trans</code>, <code>exist</code>, plus <code>assign_matrix</code> (which point belongs to which slot).</p>
+  <div class="note"><code>lm_optimization=True</code> would run LM <i>inside</i> the network, <b>before</b> the merge. The merge then throws those shapes away (it only keeps the point assignment), so that would be wasted time. Use <a href="#lm_stage"><code>lm_stage</code></a> after the merge instead.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2 class="section">1 · Preprocessing: make the real cloud look like training data</h2>
+<p>SuperDec was trained on <b>clean, complete, evenly sampled surfaces of CAD models, standing upright with +Y as up</b>.
+A depth camera gives the opposite: noisy, one-sided, much denser on the visible face, and tilted at some angle.
+Each step below fixes one of those differences.</p>
+
+<div class="card" id="denoise">
+  <h3><code>denoise(points, neighbours=20, std_ratio=2.0)</code></h3>
+  <div class="where">line 166 · <span class="badge safe">SAFE TO TUNE</span></div>
+  <div class="oneliner">Removes "flying" points that float away from the object.</div>
+  <h4>How</h4>
+  <ol>
+    <li>For every point, measure the average distance to its 20 nearest neighbours.</li>
+    <li>Points whose average is unusually large (more than <code>std_ratio</code> standard deviations above typical) are thrown out.</li>
+    <li>Safety net: if fewer than 32 points would survive, keep the original cloud.</li>
+  </ol>
+  <h4>Why it matters</h4>
+  <p>Later, the object gets scaled so its <i>farthest</i> point touches the edge of a unit cube. A single stray point 20 cm away shrinks the real object to a tiny blob and ruins everything after it.</p>
+  <h4>Knobs</h4>
+  <table>
+    <tr><th>Knob</th><th>Lower it</th><th>Raise it</th></tr>
+    <tr><td><code>std_ratio</code> (2.0)</td><td>Removes more points. Cleaner, but may eat thin parts like handles or edges.</td><td>Removes fewer points. Keeps detail but lets noise through.</td></tr>
+    <tr><td><code>neighbours</code> (20)</td><td>Judges by a very local area, so it reacts more to small clumps.</td><td>Judges by a wider area and is smoother. A bit slower.</td></tr>
+  </table>
+</div>
+
+<div class="card" id="complete_shell">
+  <h3><code>complete_shell(points, normal, offset, rng, grid=64, floor_ratio=0.3, wall_ratio=0.6)</code></h3>
+  <div class="where">line 72 · <span class="badge care">TRY CAREFULLY</span> · needs the table plane</div>
+  <div class="oneliner">The camera only sees the front and top. This invents a <b>bottom</b> (on the table) and <b>side walls</b> (straight down from the outline) so the object looks closed, like the training meshes.</div>
+  <p class="analogy">Analogy: put the object on graph paper, trace its shadow, then build cardboard walls along the shadow's outline up to the object's height and lay a cardboard floor inside it.</p>
+  <h4>How, step by step</h4>
+  <ol>
+    <li><b>Height above table:</b> for each point, how high it is above the table plane. Points below the table count as height 0.</li>
+    <li><b>Shadow on the table:</b> project every point straight down onto the table, which gives 2D coordinates.</li>
+    <li><b>Graph paper:</b> cover the shadow's bounding box with a <code>grid × grid</code> (64×64) set of cells. The cells stretch to the object's size, so bigger objects get bigger cells.</li>
+    <li><b>Height map:</b> each cell remembers the tallest point that fell in it.</li>
+    <li><b>Tidy the shadow:</b> fill tiny holes (morphological "closing") and spread heights one cell outward ("dilate"). A round 3×3 brush keeps round outlines round instead of square.</li>
+    <li><b>Floor:</b> scatter <code>floor_ratio × N</code> new points at height 0 over the filled cells.</li>
+    <li><b>Walls:</b> find the outline cells (filled minus shrunk-by-one) and scatter <code>wall_ratio × N</code> new points there, each at a <b>random</b> height between 0 and that cell's height.</li>
+    <li>Return the original points plus the floor and the walls.</li>
+  </ol>
+  <p>Each new point gets a small random offset inside its cell, and wall heights are random rather than stepped. Without that, the network sees a staircase and fits one flat slab per step.</p>
+  <h4>Knobs</h4>
+  <table>
+    <tr><th>Knob</th><th>Lower it</th><th>Raise it</th></tr>
+    <tr><td><code>grid</code> (64)</td><td>Coarser outline. Fine for simple shapes and fills holes better on sparse clouds.</td><td>Sharper outline, but sparse clouds get "holey" shadows.</td></tr>
+    <tr><td><code>floor_ratio</code> (0.3)</td><td>A weaker bottom face.</td><td>A stronger bottom face.</td></tr>
+    <tr><td><code>wall_ratio</code> (0.6)</td><td>Weaker invented sides. The network trusts the visible face more.</td><td>Stronger sides. Better volume, but the invented walls are always vertical, so tapered objects (cones, bowls) look like cylinders.</td></tr>
+  </table>
+  <div class="note"><code>uniform_resample</code> runs afterwards and evens out density, so the ratios mostly decide <i>whether there are enough points to cover</i> the floor and walls. The exact proportion matters less.</div>
+  <div class="warn">The walls assume the object is a straight extrusion of its shadow. That is great for boxes, cans and bottles, but wrong for things that overhang, like a mug handle, which gets a wall going down to the table under it.</div>
+</div>
+
+<div class="card" id="canonical_rotation">
+  <h3><code>canonical_rotation(normal)</code></h3>
+  <div class="where">line 58 · <span class="badge dont">LEAVE ALONE</span> (the "up = +Y" part)</div>
+  <div class="oneliner">Builds a rotation that makes the table normal point along +Y, so "up" means the same thing it meant in training (ShapeNet uses Y-up).</div>
+  <h4>How</h4>
+  <ol>
+    <li>Y axis = the table normal ("up").</li>
+    <li>X axis = something perpendicular to up, found with a cross product against a helper direction (world Z, or world X if up is almost parallel to Z).</li>
+    <li>Z axis = perpendicular to both.</li>
+  </ol>
+  <p>It returns a 3×3 matrix whose rows are the new X, Y, Z. Points are rotated with <code>points @ R.T</code>. At the end, <a href="#runner"><code>SuperDecRunner</code></a> undoes this so the shapes come back in the camera frame.</p>
+  <div class="tip"><b>Idea to try (not tested):</b> the spin around "up" is arbitrary, because it comes from the helper direction. Aligning X with the object's long side on the table could give the network a more consistent view.</div>
+</div>
+
+<div class="card" id="uniform_resample">
+  <h3><code>uniform_resample(points, target=4096)</code></h3>
+  <div class="where">line 137 · <span class="badge care">TRY CAREFULLY</span></div>
+  <div class="oneliner">Makes points evenly spread over the surface, so the visible face doesn't dominate.</div>
+  <h4>Why</h4>
+  <p>The network gives out primitives roughly in proportion to how many points an area has. The camera puts most points on the visible face, so without this step that face gets several stacked slabs.</p>
+  <h4>How</h4>
+  <ol>
+    <li>Split space into small cubes ("voxels") and keep one point per cube. Bigger cubes keep fewer points.</li>
+    <li>Find the cube size that leaves about <code>1.3 × 4096 ≈ 5300</code> points, using up to 20 rounds of "too many → bigger cubes, too few → smaller cubes" (binary search between <code>diag/400</code> and <code>diag/8</code>).</li>
+    <li>Return the result with the largest cube size that still kept at least 4096 points. If none did, return the input unchanged.</li>
+  </ol>
+  <h4>Knobs</h4>
+  <p><code>1.3</code> (line 161) is the spare margin above 4096. A bigger margin keeps finer detail but less even density. Closer to 1.0 gives more even density. The bounds only limit the search range.</p>
+</div>
+
+<div class="card" id="normalize_points">
+  <h3><code>normalize_points(points)</code></h3>
+  <div class="where">line 178 · <span class="badge dont">LEAVE ALONE</span></div>
+  <div class="oneliner">Moves the object's centre to (0,0,0) and scales it so it fits inside a cube from -0.5 to 0.5.</div>
+  <p>It returns the normalized points plus the <code>translation</code> and <code>scale</code> used, which are needed to undo it at the end. The network was trained in this space. From here until the final output, every size and distance is a <b>fraction of the object's size</b>, not metres. The bench converts errors back to mm for you.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 class="section">2 · Merging: fewer, better primitives</h2>
+<p>The network is good at <b>grouping points</b> but tends to cut objects into too many parts.
+The merge keeps the grouping, ignores the network's shapes, and refits everything with a fast formula plus a small search.
+It then keeps gluing the best pair of parts until gluing starts to hurt the fit.</p>
+<p>Call order: <a href="#merge_stage"><code>merge_stage</code></a> → <a href="#merge_object"><code>merge_object</code></a> (once per object) → <a href="#stack_groups"><code>stack_groups</code></a> + <a href="#fit_groups"><code>fit_groups</code></a> → <a href="#radial_distance"><code>radial_distance</code></a>.
+The functions below are explained bottom-up (smallest first).</p>
+
+<div class="card" id="radial_distance">
+  <h3><code>radial_distance(local, extent, e_prof, e_sect)</code></h3>
+  <div class="where">line 188 · <span class="badge dont">LEAVE ALONE</span> (the math) · also used by LM checks</div>
+  <div class="oneliner">The ruler: how far is a point from a superquadric's surface?</div>
+  <p class="analogy">Analogy: stand at the shape's centre and shine a laser at the point. The answer is how far the point is from where the laser crosses the shape's skin.</p>
+  <h4>Inputs</h4>
+  <ul>
+    <li><code>local</code>: the point in the shape's own frame (already centred and rotated).</li>
+    <li><code>extent</code>: half-sizes (a, b, c) along the shape's x, y, z.</li>
+    <li><code>e_sect</code> (ε₂): roundness in x-y. <code>e_prof</code> (ε₁): roundness along z.</li>
+  </ul>
+  <p>It returns one number per point. 0 means exactly on the surface.</p>
+  <details><summary>The formula (optional)</summary>
+    <p>Inside-outside function: F = ( |x/a|<sup>2/ε₂</sup> + |y/b|<sup>2/ε₂</sup> )<sup>ε₂/ε₁</sup> + |z/c|<sup>2/ε₁</sup>.
+    F = 1 on the surface, below 1 inside, above 1 outside.<br>
+    Radial distance = |point| × | 1 − F<sup>−ε₁/2</sup> |.</p>
+    <p>It is computed with logarithms (<code>log</code>, <code>logaddexp</code>) because powers like 1/0.1 = 10 overflow to NaN when done directly.</p>
+  </details>
+  <div class="note">It only checks that <b>the points lie on the surface</b>. It does <b>not</b> penalise parts of the surface that have no points near them. A shape can be bigger than the data in empty regions and still score well. That matters if you change the scoring.</div>
+</div>
+
+<div class="card" id="fit_groups">
+  <h3><code>fit_groups(pts, mask, grid=5, shrinks=(0.85, 0.95, 1.0), budget=4_000_000)</code></h3>
+  <div class="where">line 209 · <span class="badge care">TRY CAREFULLY</span> · the workhorse</div>
+  <div class="oneliner">Fits <b>one superquadric to each group of points</b>, for all groups at once, with no slow optimisation. It returns the shapes and how well each one fits.</div>
+  <h4>Step by step (for every group in parallel)</h4>
+  <ol>
+    <li><b>Centre</b> = the average of the group's real points (the <code>mask</code> skips padding). This becomes <code>trans</code>.</li>
+    <li><b>Orientation</b>: PCA. The covariance matrix's eigenvectors give the 3 main directions of the points. These become <code>rotate</code>.</li>
+    <li><b>Try 3 axis orders.</b> ε₁ always acts on the shape's local <b>z</b>, so it matters which main direction is called z. It tries z = the longest, the thinnest and the middle direction.
+      <br><i>Why:</i> a short, wide can has two almost equal directions, so PCA's order is basically random. The wrong choice makes a box fit better than a cylinder.
+      <br>If an order turns out mirrored, one axis is flipped. That is harmless because SQs are symmetric.</li>
+    <li><b>Size</b>: rotate the points into each candidate frame. Half-size on each axis = the farthest point on that axis, like a tight box around the points.</li>
+    <li><b>Grid search</b> over what's left:
+      <ul>
+        <li><code>shrink</code> ∈ {0.85, 0.95, 1.0}: shrink the box a bit, since the farthest point is often noise.</li>
+        <li>ε₁ ∈ <code>grid</code> values from 0.1 to 1.9 (with grid=5: 0.1, 0.55, 1.0, 1.45, 1.9).</li>
+        <li>ε₂ ∈ the same values.</li>
+      </ul>
+      With the defaults: 3 shrinks × 5 × 5 = 75 combos × 3 axis orders = <b>225 candidate shapes per group</b>.</li>
+    <li><b>Score</b> each candidate = average <a href="#radial_distance">radial distance</a> of the group's points. Keep the lowest.</li>
+  </ol>
+  <p><b>Returns:</b> <code>params</code> (<code>scale</code>, <code>shape</code>, <code>rotate</code>, <code>trans</code>) and the <b>residual</b>, the best score, used by the merge to decide.</p>
+  <h4>Knobs</h4>
+  <table>
+    <tr><th>Knob</th><th>Effect</th><th>Risk</th></tr>
+    <tr><td><code>grid</code></td><td>More values give finer roundness but are slower. Cost grows with grid². Set via <code>merge_grid</code>.</td><td><span class="badge safe">SAFE</span></td></tr>
+    <tr><td><code>shrinks</code></td><td>Add 0.75 if shapes look puffy. Add 1.05 if they look too small or clipped.</td><td><span class="badge care">CAREFUL</span></td></tr>
+    <tr><td>exponent range (line 239)</td><td>Most real objects sit in 0.1 to 1.0. <code>linspace(0.1, 1.0, grid)</code> gives finer steps at the same cost but removes pinched shapes. <b>Stay inside 0.1 to 1.9</b>, because LM assumes that range.</td><td><span class="badge care">CAREFUL</span></td></tr>
+    <tr><td><code>budget</code></td><td>Only controls how much is computed per GPU chunk. Lower it if you run out of memory. Results are identical.</td><td><span class="badge safe">SAFE</span></td></tr>
+    <tr><td>the score</td><td>The place to add new criteria, e.g. a penalty for big shapes or for surface far from any point (see the note in radial_distance).</td><td><span class="badge care">CAREFUL</span></td></tr>
+  </table>
+  <div class="note">Speed comes from replacing optimisation with "formula + lookup table": one 3×3 eigendecomposition and 225 scores per group. The old refine stage ran an Adam optimiser per candidate pair and took about 19 s per object. This takes milliseconds.</div>
+</div>
+
+<div class="card" id="stack_groups">
+  <h3><code>stack_groups(points, groups, cap, rng)</code></h3>
+  <div class="where">line 266 · <span class="badge safe">SAFE</span> via <code>merge_cap</code></div>
+  <div class="oneliner">Packs groups of different sizes into one equal-sized array for the GPU.</div>
+  <ol>
+    <li>Width = the size of the biggest group, but never more than <code>cap</code>.</li>
+    <li>Groups bigger than <code>cap</code> are randomly subsampled down to <code>cap</code> points.</li>
+    <li>Smaller groups are padded with zeros, and <code>mask</code> marks real points as True.</li>
+  </ol>
+  <p><code>cap</code> = <code>merge_cap</code> (192) while deciding merges, and <code>4 × cap</code> (768) for the final refit. <b>Lower</b> is faster but noisier: decisions are based on fewer points and change more between runs. <b>Higher</b> is more stable but slower.</p>
+</div>
+
+<div class="card" id="merge_object">
+  <h3><code>merge_object(points, groups, tol, rng, grid, cap)</code></h3>
+  <div class="where">line 278 · <span class="badge safe">SAFE</span> (<code>tol</code>) / <span class="badge care">CAREFUL</span> (the rule)</div>
+  <div class="oneliner">For one object: keep gluing the pair of parts that one shape describes best, until any further glue would make the fit noticeably worse.</div>
+  <h4>Step by step</h4>
+  <ol>
+    <li>Fit every current group on its own and remember its residual (how well it fits).</li>
+    <li><b>Repeat</b> while there are at least 2 groups:
+      <ol type="a">
+        <li>Make <b>every possible pair</b> (A, B) and combine their points.</li>
+        <li>Fit one shape to each combined group, all in one batch.</li>
+        <li>For each pair compute
+          <br><code>ratio = error of the combined fit ÷ max(error of A, error of B)</code>
+          <br>In words: <i>how much worse is one shape for both, compared with the worse of the two separate fits?</i></li>
+        <li>Take the pair with the <b>smallest</b> ratio.</li>
+        <li>If that ratio is above <code>tol</code> (1.15, i.e. more than 15% worse): <b>stop</b>.</li>
+        <li>Otherwise glue them: A becomes A+B, and B is deleted.</li>
+      </ol></li>
+    <li>Return the final list of groups (point indices only, not shapes).</li>
+  </ol>
+  <h4>Example: a mug split into 3 stacked slabs plus a handle</h4>
+  <table>
+    <tr><th>Round</th><th>Best pair</th><th>Ratio</th><th>Result</th></tr>
+    <tr><td>1</td><td>slab 1 + slab 2</td><td>≈ 1.0</td><td>merge (one cylinder fits both)</td></tr>
+    <tr><td>2</td><td>slabs 1-2 + slab 3</td><td>≈ 1.0</td><td>merge</td></tr>
+    <tr><td>3</td><td>body + handle</td><td>≈ 3</td><td>&gt; 1.15, <b>stop</b> → 2 primitives</td></tr>
+  </table>
+  <h4>Good to know</h4>
+  <ul>
+    <li>The ratio can be <b>below 1</b>: two badly fitted halves of a box can fit <i>better</i> as one box.</li>
+    <li>There is <b>no "are they touching?" check</b>. Far-apart parts just get a big error and are never chosen.</li>
+    <li>It is <b>greedy</b>: it never un-glues. Each round tests n(n−1)/2 pairs, and there are at most n−1 rounds.</li>
+  </ul>
+  <h4>Things you could change</h4>
+  <table>
+    <tr><th>Change</th><th>Effect</th></tr>
+    <tr><td><code>tol</code> ↑ (e.g. 1.3)</td><td>Merges more, gives fewer and coarser shapes.</td></tr>
+    <tr><td><code>tol</code> ↓ (e.g. 1.05)</td><td>Merges less, gives more and tighter shapes.</td></tr>
+    <tr><td><code>base</code> = <code>max(...)</code> → point-weighted average of A and B</td><td>Stricter: a tiny badly fitted part can no longer "excuse" a bad merge.</td></tr>
+    <tr><td>Add a gap/adjacency check</td><td>Prevents gluing parts that don't touch, even if one shape happens to cover both.</td></tr>
+  </table>
+</div>
+
+<div class="card" id="merge_stage">
+  <h3><code>merge_stage(x, out, rng, tol=1.15, grid=5, cap=192)</code></h3>
+  <div class="where">line 308 · entry point of the merge · <span class="badge care">CAREFUL</span> for its hard-coded numbers</div>
+  <div class="oneliner">Takes the network output, merges each object, does a careful final fit, and returns results in the <b>same format</b> as the network so nothing downstream notices.</div>
+  <h4>Step by step</h4>
+  <ol>
+    <li><b>Read the network:</b> each point goes to its strongest slot (<code>assign_matrix</code> argmax). A slot is "alive" if <code>exist &gt; 0.5</code>.</li>
+    <li><b>Build groups</b> = the point indices of each alive slot.
+      <ul><li>Groups with fewer than <b>32 points</b> are dropped as too small to fit reliably.</li>
+          <li>If nothing is left, the whole object becomes one group.</li></ul></li>
+    <li><b>Merge</b> each object with <a href="#merge_object"><code>merge_object</code></a>.</li>
+    <li><b>Final refit</b> of the surviving groups, done more carefully than the quick fits used for deciding:
+      <ul><li>4× more points: <code>4 × cap</code> = 768.</li>
+          <li>A finer roundness grid: <code>2 × grid + 3</code> = 13 values per exponent (0.1, 0.25, 0.4 … 1.9).</li></ul></li>
+    <li><b>Package</b>: fill the same keys the network uses (<code>scale, shape, rotate, trans, exist, assign_matrix</code>). Unused slots get harmless defaults (tiny size, <code>exist = 0</code>), and <code>assign_matrix</code> becomes a clean one-hot.</li>
+  </ol>
+  <h4>Hard-coded numbers you may want to touch</h4>
+  <table>
+    <tr><th>Number</th><th>Line</th><th>Lower it</th><th>Raise it</th></tr>
+    <tr><td>32 (min points per group)</td><td>317</td><td>Keeps small real parts, but also noisy fragments.</td><td>Drops more fragments; small details vanish.</td></tr>
+    <tr><td>0.5 (alive threshold)</td><td>311</td><td>Uses more of the network's slots.</td><td>Uses only confident slots.</td></tr>
+    <tr><td><code>4 * cap</code></td><td>330</td><td>Faster final fit.</td><td>A more precise final fit.</td></tr>
+    <tr><td><code>2 * grid + 3</code></td><td>331</td><td>Faster, coarser roundness.</td><td>Finer roundness (cost grows with the square).</td></tr>
+  </table>
+  <div class="note">Points in groups dropped in step 2 end up assigned to <b>no</b> primitive. They are ignored by the final fit and by <a href="#primitive_errors"><code>primitive_errors</code></a>.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2 class="section">3 · Refinement (optional): polish each shape</h2>
+
+<div class="card" id="primitive_errors">
+  <h3><code>primitive_errors(x, out)</code></h3>
+  <div class="where">line 340 · diagnostic · <span class="badge safe">SAFE</span> (read-only)</div>
+  <div class="oneliner">For every primitive: the average radial distance of <i>its own</i> points to its surface. NaN if it has no points.</div>
+  <p>Used by <code>lm_stage</code> to compare "before" and "after". Handy for your own debugging too.</p>
+</div>
+
+<div class="card" id="lm_stage">
+  <h3><code>lm_stage(x, out, steps=5)</code></h3>
+  <div class="where">line 358 · <span class="badge safe">SAFE</span> (<code>lm</code>, <code>lm_steps</code>) · CUDA only</div>
+  <div class="oneliner">Runs a few Levenberg-Marquardt (LM) steps to fine-tune all 11 numbers of every merged shape. It keeps the result <b>only for shapes that actually got better</b>.</div>
+  <h4>Step by step</h4>
+  <ol>
+    <li>Measure each alive primitive's error (<code>primitive_errors</code>) as "before".</li>
+    <li>Clamp the exponents slightly inside (0.1, 1.9). LM converts them with a formula that becomes ±infinity exactly at 0.1 and 1.9, and the grid search produces those exact values. That is what <code>LM_SHAPE_MARGIN</code> is for.</li>
+    <li>Run <code>LMOptimizer</code> from the SuperDec package for <code>steps</code> iterations.</li>
+    <li>Measure "after". For each primitive, <b>accept</b> the LM version only if it is alive, has no NaN/inf, and its error went down. Otherwise keep the merge version.</li>
+    <li>Return the result plus stats (accepted count, before/after errors). The bench prints these.</li>
+  </ol>
+  <p>So LM can <b>never make a shape worse</b>. At worst it wastes time.</p>
+  <table>
+    <tr><th>Knob</th><th>Effect</th></tr>
+    <tr><td><code>lm_steps</code> (5)</td><td>More steps polish more but are slower. Check the "accepted" count in the bench: if it's 0, LM isn't helping.</td></tr>
+    <tr><td><code>LM_SHAPE_MARGIN</code></td><td><span class="badge dont">LEAVE</span> It only exists to avoid infinity.</td></tr>
+  </table>
+</div>
+
+<!-- ============================================================ -->
+<h2 class="section">4 · Glue: the class the node actually calls</h2>
+
+<div class="card" id="runner">
+  <h3><code>class SuperDecRunner</code></h3>
+  <div class="where">line 397 · the ROS node creates one of these and calls it every cycle</div>
+  <div class="oneliner">Point clouds in (camera frame, metres) → superquadrics out (camera frame, metres).</div>
+
+  <h4><code>__init__(...)</code>: settings</h4>
+  <p>It stores every on/off switch and merge/LM setting, loads the model once, picks the GPU if one is available, and creates the random generator (<code>seed=0</code>). If you ask for LM without CUDA, it warns and turns LM off.</p>
+
+  <h4><code>prepare(points, plane, frame)</code>: preprocessing for one object</h4>
+  <p>Fixed order (each step only runs if its switch is on):</p>
+  <p><code>denoise</code> → <code>complete_shell</code> (needs the plane) → rotate with <code>frame</code> (canonical) → <code>uniform_resample</code> → pick exactly 4096 points at random.</p>
+  <div class="warn">The order matters. <code>complete_shell</code> must run <b>before</b> the rotation because it uses the table plane in camera coordinates. Denoise goes first so stray points don't get walls built under them.</div>
+
+  <h4><code>__call__(clouds, plane)</code>: the full run</h4>
+  <ol>
+    <li>Build the canonical rotation once from the table normal.</li>
+    <li>For each object: <code>prepare</code> → <code>normalize_points</code>. Remember each object's shift and scale.</li>
+    <li>Stack all objects into one batch and run the network <b>once</b>.</li>
+    <li><code>merge_stage</code> (if <code>merge</code>), then <code>lm_stage</code> (if <code>lm</code>).</li>
+    <li><b>Undo everything</b> for each object, keeping only alive primitives:
+      <ul>
+        <li>size × scale; centre × scale + shift (back to metres).</li>
+        <li>undo the canonical rotation on centres and orientations (back to the camera frame).</li>
+        <li>exponents are unitless, so they stay as they are.</li>
+      </ul></li>
+    <li>Return one dict per object: <code>{'scale', 'shape', 'rotate', 'trans'}</code>.</li>
+  </ol>
+  <div class="tip">To add a new preprocessing step, write a function, call it inside <code>prepare</code>, add a switch in <code>__init__</code> and a parameter in <code>superdec_node.py</code>, <b>and</b> add the same step to <code>preprocess()</code> in the bench.</div>
+</div>
+
+<p style="color:var(--muted); font-size:13px; margin-top:40px">Written from <code>superdec_utils.py</code> as of 2026-10-19. "Ideas to try" are suggestions, not measured results. Benchmark them before relying on them.</p>
+
+</main>
+</body>
+</html>

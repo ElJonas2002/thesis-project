@@ -29,7 +29,7 @@ PLANE_TOPIC = '/fastsam_node/foreground/plane'
 
 
 def decode_cloud(msg):
-    """Read the `[x, y, z, instance]` layout written by `irs_node` straight out of the buffer."""
+    """Read the `[x, y, z, instance]` layout written by `fastsam_node` straight out of the buffer."""
     if msg.point_step != POINT_STEP or not msg.data:
         return None
     data = np.frombuffer(msg.data, dtype=np.float32).reshape(-1, 4)
@@ -37,7 +37,9 @@ def decode_cloud(msg):
 
 
 def surface_topology(resolution):
-    """Parameter grid and triangle indices, built once and reused by every primitive."""
+    """
+    Parameter grid and triangle indices, built once and reused by every primitive.
+    """
     eta, omega = np.meshgrid(np.linspace(-np.pi / 2, np.pi / 2, resolution),
                              np.linspace(-np.pi, np.pi, 2 * resolution), indexing='ij')
     index = np.arange(eta.size).reshape(eta.shape)
@@ -112,6 +114,8 @@ class SuperDecNode(Node):
         self.declare_parameter('merge_tol', 1.15)
         self.declare_parameter('merge_grid', 5)
         self.declare_parameter('merge_cap', 192)
+        self.declare_parameter('lm', False)
+        self.declare_parameter('lm_steps', 5)
         self.declare_parameter('verbose', False)
 
         self.verbose = self.get_parameter('verbose').value
@@ -136,7 +140,11 @@ class SuperDecNode(Node):
             merge=self.get_parameter('merge').value,
             merge_tol=self.get_parameter('merge_tol').value,
             merge_grid=self.get_parameter('merge_grid').value,
-            merge_cap=self.get_parameter('merge_cap').value)
+            merge_cap=self.get_parameter('merge_cap').value,
+            lm=self.get_parameter('lm').value,
+            lm_steps=self.get_parameter('lm_steps').value)
+        if self.get_parameter('lm').value and not self.runner.lm:
+            self.get_logger().warn('LM refinement needs CUDA; disabled.')
         self.get_logger().info(f'SuperDec loaded on {self.runner.device}.')
 
         inputs = ReentrantCallbackGroup()
@@ -180,8 +188,11 @@ class SuperDecNode(Node):
         if self.cloud is None:
             return 'No cloud received yet.'
 
+        # Get points and instance IDs from the clouds
         points, ids = self.cloud
         header = self.header
+
+        # Filter out the background (label 0) and keep only the first `max_instances` instances
         labels = [i for i in np.unique(ids) if i > 0]
         clouds, kept = [], []
         for label in labels[:self.max_instances]:
@@ -209,6 +220,9 @@ class SuperDecNode(Node):
         total = sum(r['scale'].shape[0] for r in results)
         message = (f'Published {total} superquadrics for {len(results)} instances '
                 f'in {elapsed:.2f} s.')
+        stats = self.runner.last_lm_stats
+        if self.runner.lm and stats is not None:
+            message += f' LM accepted {stats["accepted"]}/{stats["alive"]} primitives.'
         if self.verbose:
             self.get_logger().info(message)
         return message
@@ -237,6 +251,8 @@ class SuperDecNode(Node):
                 marker.pose.orientation.y = float(quaternion[1])
                 marker.pose.orientation.z = float(quaternion[2])
                 marker.pose.orientation.w = float(quaternion[3])
+                
+#TODO: Publish real scales and shape parameters for Isaac Sim simulation ans VLA inputs.
                 marker.scale.x = marker.scale.y = marker.scale.z = 1.0
                 marker.color = color
                 marker.points = [Point(x=float(p[0]), y=float(p[1]), z=float(p[2]))

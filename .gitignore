@@ -12,6 +12,12 @@ scripts/offline_tests.py
 scripts/openvla_test_v2.py
 scripts/runpod_finetune.sh
 scripts/graspnet_export.py
+scripts/u2net.py
+scripts/u2net_train.py
+
+src/intel_realsense/intel_realsense/u2net.py
+src/intel_realsense/intel_realsense/u2net_bgrm.py
+src/intel_realsense/intel_realsense/depth_ransac_bgrem.py
 
 #Models
 runs/
@@ -25,4 +31,5 @@ cyclonedds_config.xml
 robots/
 weights/
 snapshots/
+captures/
 exports/

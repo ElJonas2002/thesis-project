@@ -142,7 +142,8 @@ The script [eval_segmentation.py](../scripts/eval_segmentation.py) evaluates eve
 | `--canonical` | Rotates the table normal to $+Y$ | Matches ShapeNet's y-up prior |
 | `--complete` | Closes the single-view shell with the table as floor | SuperDec was trained on closed mesh surfaces |
 | `--uniform` | Voxel downsample with binary-searched voxel size (~1.3 × 4096 points) | Equalises density between real and synthetic surfaces |
-| `--merge` | Closed-form primitive merging (Step 11) | Removes stacked/redundant primitives |
+| `--merge` | Closed-form primitive merging (Step 10) | Removes stacked/redundant primitives |
+| `--lm` | LM refinement after the merge (Step 10b), `--lm-steps` iterations | Polishes the merged fits |
 
 **Metric correction.** "Fewer primitives = better" proved a **defective proxy**: visual inspection in viser showed flat slabs glued to the visible face. It was replaced by:
 
@@ -159,7 +160,7 @@ and, finally, by the **Solina-Bajcsy radial distance** from the cloud to the clo
 | `--canonical --denoise` | 8.66 mm | 5.83 mm | 5.84 mm |
 | **`+ --complete --uniform`** | **7.05 mm** | **2.82 mm** | **2.42 mm** |
 
-`--lm` (SuperDec's Levenberg-Marquardt refinement) gave no measurable gain (flatness 0.401 → 0.404) and is not used. `--extrude` (solid fill) was superseded by `--complete`.
+`--lm` (SuperDec's Levenberg-Marquardt refinement) gave no measurable gain (flatness 0.401 → 0.404) and is not used; it was later found to run before the merge and be discarded (see Step 10b). `--extrude` (solid fill) was superseded by `--complete`.
 
 #### Step 9 — Box bias refinement
 
@@ -203,6 +204,25 @@ Each round fits **all pairs in one call** and accepts only the best merge. The s
 python scripts/superdec_offline.py --canonical --denoise --complete --uniform --merge --viser --export exports/run01
 ```
 
+#### Step 10b — LM refinement after the merge (optional, off by default)
+
+The `--lm` result in Step 8 was misleading: LM ran *inside* the network forward, **before** the merge, and `merge_stage` keeps only `assign_matrix`/`exist`, so its output was discarded. `lm_stage` now runs SuperDec's `LMOptimizer` **after** the merge, seeded with the merged primitives and their hard assignment:
+
+- Exponents are clamped to $[0.101, 1.899]$ first: the merge grid emits exactly 0.1/1.9, which LM's `logit((\varepsilon-0.1)/1.8)` maps to $\pm\infty$.
+- **Guard:** a primitive keeps the LM result only if it is finite and lowers the radial error on its own points, so LM can never worsen a fit.
+- CUDA only (`LMOptimizer` hard-codes `.cuda()`); on CPU it is disabled with a warning.
+- Upstream quirk: LM's coverage term zeroes the distance of assigned points, so it is ~constant and LM effectively minimises only the weighted radial residual.
+
+Measured on snapshot `20261015_111823` (`--canonical --denoise --complete --uniform --merge`):
+
+| Radial error | obj01 | obj02 | obj03 | Extra time (3 objects, warm) |
+|---|---|---|---|---|
+| Merge only | 4.14 mm | 7.49 mm | 1.70 mm | — |
+| `+ --lm` (5 steps) | 3.83 mm | 7.23 mm | 1.51 mm | ~0.3 s |
+| `+ --lm --lm-steps 10` | 3.76 mm | 7.18 mm | 1.47 mm | ~0.45 s |
+
+LM was accepted on every primitive. It mainly corrects extents, centre and orientation; the exponents barely move, so it does **not** fix the box bias of Step 9.
+
 ### 2.3 ROS 2 integration
 
 #### Step 11 — `superdec_node`
@@ -225,7 +245,7 @@ python scripts/superdec_offline.py --canonical --denoise --complete --uniform --
 Prompting used to require the OpenCV window (`t` key) and a dedicated `gnome-terminal`, since `ros2 launch` does not forward stdin. [prompt_cli.py](../src/intel_realsense/intel_realsense/prompt_cli.py) decouples it:
 
 - **Separate node** run with `ros2 run intel_realsense prompt_cli` in any terminal; works with `show_window:=false`.
-- **Keys**: `t` types a comma-separated prompt, `c` segments everything, `q` quits. Piped stdin publishes one prompt per line (`echo "cup, bowl" | ros2 run …`).
+- **Keys**: `t` types a comma-separated prompt, `c` segments everything, `s` captures the current frame (see Step 15), `q` quits. Piped stdin publishes one prompt per line (`echo "cup, bowl" | ros2 run …`).
 - **Interface**: `std_msgs/String` on `/fastsam_node/prompt`, latched (`TRANSIENT_LOCAL`, depth 1) on both ends so a late `fastsam_node` still gets the last prompt.
 - `fastsam_node` no longer blocks on `input()`; the window keeps only `q` (quit) and `s` (save). The `gnome-terminal` prefix was removed from the launch file.
 - The topic is the entry point for a future VLA module that decomposes complex instructions into FastSAM prompts without pausing segmentation.
@@ -233,7 +253,15 @@ Prompting used to require the OpenCV window (`t` key) and a dedicated `gnome-ter
 #### Step 14: Windows Support
 Since Isaac Sim runs locally on a Windows machine at the lab and it will be the simulator needed to develop tests and model trainings, a Windows support for the code was required. See the [Windows initial setup guide](WINDOWS_SETUP.md) for more details about the implementation.
 
----
+#### Step 15 — Headless figure capture
+
+To document the pipeline stages without a display, `fastsam_node` exposes a `~/capture` service (`std_srvs/Trigger`), triggered with `s` in `prompt_cli` (or `ros2 service call /fastsam_node/capture std_srvs/srv/Trigger`). It writes the latest processed frame with `cv.imwrite` only, so it works with `show_window:=false`, to `captures/<timestamp>/`:
+
+- `1_rgb.png`: raw colour frame.
+- `2_depth.png`: aligned depth, TURBO colormap (near = red) stretched over the 2–98 % depth percentiles; holes in black.
+- `3_ransac_filtered.png`: colour frame keeping only the pixels raised more than `plane_clearance` above the RANSAC table plane (after flying-pixel rejection).
+- `4_masks.png`: the FastSAM masks that passed the table filter (and the CLIP prompt, if any) blended over the colour frame.
+- `info.txt`: prompt, mask count, depth colormap range and plane coefficients, for figure captions.
 
 ## 3. Current architecture
 
@@ -286,6 +314,7 @@ flowchart TD
 | `~/foreground/plane` (pub, latched) | `std_msgs/Float64MultiArray` | `[nx, ny, nz, d]` |
 | `~/prompt` (sub, latched) | `std_msgs/String` | Comma-separated text prompt (from `prompt_cli` or the VLA) |
 | `~/snapshot` (srv) | `std_srvs/Trigger` | Dumps the latest instance cloud to `snapshots/<timestamp>/objNN.ply` + `plane.npz` for the offline bench |
+| `~/capture` (srv) | `std_srvs/Trigger` | Saves RGB, depth, RANSAC-filtered and mask-overlay PNGs of the latest frame to `captures/<timestamp>/` |
  
 ### `superdec_node` interface
 
@@ -383,8 +412,6 @@ Primitives are only published as `MarkerArray` for RViz. A typed message (per in
 | `superdec_node` with batching and markers | ✅ |
 | Launch file `sq_launch.py` | ✅ |
 | Headless prompting (`prompt_cli`) | ✅ |
-| Multi-view TSDF fusion | ⬜ next |
-| SuperDec fine-tuning | ⬜ pending |
 | Typed superquadric message + robot-frame TF | ⬜ pending |
 | Grasp planning / VLA integration | ⬜ pending |
 

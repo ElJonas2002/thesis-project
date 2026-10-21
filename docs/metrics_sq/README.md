@@ -32,7 +32,6 @@ Follows the *Unseen Object Instance Segmentation* protocol (UOIS-Net, Xie et al.
 | :---: | :---: | :---: | :---: | :--- |
 | **Overlap F** | `inst_overlap_f` | $\dfrac{2PR}{P+R}$, with $P=\dfrac{\sum_{\text{match}} I_{ij}}{\sum_i\lvert\hat M_i\rvert}$, $R=\dfrac{\sum_{\text{match}} I_{ij}}{\sum_j\lvert M_j\rvert}$ | ↑ | **Main UOIS metric.** Unlike `fg_iou`, it penalises merging two objects into one, because half of the merged blob has no match. |
 | **%F ≥ 0.75** | `inst_f075` | $\dfrac{1}{G}\,\text{\#}\{j : F_{ij}\ge 0.75\}$ over matched pairs ($G$ = number of GT objects) | ↑ | Fraction of objects segmented well enough to be usable. The most interpretable one for manipulation ("the robot can use 55% of the objects"). |
-| **Under-segmentation** | `inst_under_seg` | $\text{\#}\{i : \#\{j : I_{ij}/\lvert M_j\rvert\ge 0.5\}\ge 2\}$ | ↓ | Predictions per frame that swallow at least half of two or more objects: touching objects merged into one blob. Expected failure of `connectedComponentsWithStats`. |
 
 ## 3. Point-cloud quality (`pc_*`)
 
@@ -91,7 +90,6 @@ GraspNet-1Billion RealSense, scenes 90-99, stride 8 (320 frames per model), 640�
 | MAE ↓ | 0.144 ± 0.042 | 0.166 ± 0.077 | 0.136 ± 0.072 | 0.124 ± 0.047 | **0.096 ± 0.038** |
 | Overlap F ↑ | 0.422 ± 0.175 | 0.393 ± 0.170 | 0.429 ± 0.178 | 0.663 ± 0.107 | **0.689 ± 0.087** |
 | %F ≥ 0.75 ↑ | 0.247 ± 0.185 | 0.175 ± 0.134 | 0.180 ± 0.162 | 0.570 ± 0.152 | **0.615 ± 0.157** |
-| Under-segmentation ↓ | 1.40 ± 0.64 | 0.92 ± 0.76 | 1.08 ± 0.71 | 0.04 ± 0.19 | **0.02 ± 0.12** |
 | Outlier ratio ↓ | 0.290 ± 0.202 | 0.220 ± 0.201 | 0.240 ± 0.197 | 0.035 ± 0.045 | **0.022 ± 0.032** |
 | Completeness ↑ | **0.908 ± 0.086** | 0.838 ± 0.143 | 0.838 ± 0.150 | 0.810 ± 0.082 | 0.842 ± 0.066 |
 | Radial error [mm] ↓ | 8.9 ± 5.447 | 9.982 ± 7.182 | 10.85 ± 8.2 | 10.844 ± 5.531 | **8.363 ± 3.166** |

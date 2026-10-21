@@ -26,6 +26,7 @@ RGB_TOPIC = 'camera/camera/color/image_raw'
 DEPTH_TOPIC = 'camera/camera/aligned_depth_to_color/image_raw'
 INFO_TOPIC = 'camera/camera/color/camera_info'
 SNAPSHOT_PATH = os.path.join(os.getcwd(), 'snapshots')
+CAPTURE_PATH = os.path.join(os.getcwd(), 'captures')
 
 
 def write_ply(path, points):

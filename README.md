@@ -81,6 +81,9 @@
     ```
 
 ## 🚀️ Quick Start
+
+For multi-machine ROS 2 over a VPN, configure both hosts with the [automatic CycloneDDS setup guide](docs/WINDOWS_SETUP.md#1-configure-both-hosts-automatically). The script detects the local IPv4/interface from the route to the required remote IP; the domain defaults to 42.
+
 1. Launch the ROS Wrapper for RealSense with the following arguments:
     - `align_depth`: Forces to publish RGB raw image with its corresponding depth image synchronously (depth image will be published in         `camera/camera/aligned_depth_to_color/image_raw` topic).
     - `spatial_filter`: Preserves edges and object features while smoothing the image to reduce noise without blurring it.  

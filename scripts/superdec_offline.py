@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.join(REPO_ROOT, 'src', 'intel_realsense'))
 
 from intel_realsense.superdec_utils import (  # noqa: E402
     N_POINTS, add_superdec_to_path, canonical_rotation, complete_shell, denoise, load_model,
-    merge_stage, normalize_points, uniform_resample)
+    lm_stage, merge_stage, normalize_points, uniform_resample)
 
 add_superdec_to_path(os.path.join(REPO_ROOT, 'superdec'))
 
@@ -51,7 +51,9 @@ def read_ply(path):
 
 
 def resolve_snapshot(path):
-    """Accept either a capture folder or the parent, in which case the newest capture wins."""
+    """
+    Accept either a capture folder or the parent, in which case the newest capture wins.
+    """
     if glob.glob(os.path.join(path, 'obj*.ply')):
         return path
     # Capture folders are named after their timestamp, so sorting by name sorts by time.
@@ -89,7 +91,10 @@ def main():
     parser.add_argument('--uniform', action='store_true',
                         help='voxel downsample so surface density is uniform')
     parser.add_argument('--denoise', action='store_true', help='statistical outlier removal')
-    parser.add_argument('--lm', action='store_true', help='enable Levenberg-Marquardt refinement')
+    parser.add_argument('--lm', action='store_true',
+                        help='Levenberg-Marquardt refinement after the merge, kept per primitive '
+                             'only if it lowers the radial error (CUDA only)')
+    parser.add_argument('--lm-steps', type=int, default=5, help='LM iterations')
     parser.add_argument('--merge', action='store_true',
                         help='greedily merge primitives a single superquadric can explain')
     parser.add_argument('--merge-tol', type=float, default=1.15,
@@ -117,7 +122,10 @@ def main():
         raise SystemExit(f'--canonical needs a plane.npz in {snapshot_dir}')
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    model = load_model(os.path.join(REPO_ROOT, args.checkpoint_dir), device, args.lm)
+    model = load_model(os.path.join(REPO_ROOT, args.checkpoint_dir), device)
+    if args.lm and device != 'cuda':
+        print('LM refinement needs CUDA; --lm ignored')
+        args.lm = False
 
     rng = np.random.default_rng(0)
     batch, translations, scales, names = [], [], [], []
@@ -141,8 +149,17 @@ def main():
             out = merge_stage(x, out, rng, args.merge_tol, args.merge_grid, args.merge_cap)
         print(f'\nmerge: {time.perf_counter() - start:.2f} s for {x.shape[0]} objects')
 
-    errors = [mean_error(x[b], out['scale'][b], out['shape'][b], out['rotate'][b],
-                         out['trans'][b], out['exist'][b, :, 0] > 0.5) for b in range(x.shape[0])]
+    errors = object_errors(x, out)
+    lm_errors = None
+    if args.lm:
+        torch.cuda.synchronize()
+        start = time.perf_counter()
+        with torch.no_grad():
+            out, stats = lm_stage(x, out, args.lm_steps)
+        torch.cuda.synchronize()
+        print(f'lm: {time.perf_counter() - start:.2f} s, accepted {stats["accepted"]}/'
+              f'{stats["alive"]} primitives')
+        lm_errors = object_errors(x, out)
     out = {k: v.detach().cpu() for k, v in out.items()}
 
     translations, scales = np.stack(translations), np.array(scales)
@@ -152,15 +169,25 @@ def main():
     handler = PredictionHandler.from_outdict(out, pcs, names)
     report(handler, names)
 
-    print(f'\n{"object":>28s}  {"recon error":>13s}')
-    for name, error, scale in zip(names, errors, scales):
-        print(f'{name:>28s}  {error * scale * 1000:10.2f} mm')
+    if lm_errors is None:
+        print(f'\n{"object":>28s}  {"recon error":>13s}')
+        for name, error, scale in zip(names, errors, scales):
+            print(f'{name:>28s}  {error * scale * 1000:10.2f} mm')
+    else:
+        print(f'\n{"object":>28s}  {"before LM":>13s}  {"after LM":>13s}')
+        for name, error, lm_error, scale in zip(names, errors, lm_errors, scales):
+            print(f'{name:>28s}  {error * scale * 1000:10.2f} mm  {lm_error * scale * 1000:10.2f} mm')
 
     if args.export:
         export(handler, names, os.path.join(REPO_ROOT, args.export), args.resolution)
 
     if args.viser:
         show(handler, args.resolution)
+
+
+def object_errors(x, out):
+    return [mean_error(x[b], out['scale'][b], out['shape'][b], out['rotate'][b],
+                       out['trans'][b], out['exist'][b, :, 0] > 0.5) for b in range(x.shape[0])]
 
 
 def mean_error(points, scale, shape, rot, trans, alive):

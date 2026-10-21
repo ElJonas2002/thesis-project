@@ -41,6 +41,18 @@ def overlay_masks(frame, masks, palette, alpha=0.5):
     frame[painted] = cv.addWeighted(frame, 1 - alpha, canvas, alpha, 0)[painted]
     return frame
 
+def colorize_depth(depth, valid, low_pct=2, high_pct=98):
+    """TURBO-coloured depth (near = red, far = blue), invalid pixels black. Returns ``(image, lo, hi)``."""
+    image = np.zeros((*depth.shape, 3), dtype=np.uint8)
+    if not valid.any():
+        return image, 0.0, 0.0
+    # Percentiles instead of min/max so a few far outliers don't flatten the contrast.
+    lo, hi = np.percentile(depth[valid], (low_pct, high_pct))
+    norm = np.clip((depth - lo) / max(hi - lo, 1e-6), 0.0, 1.0)
+    image = cv.applyColorMap((255 * (1.0 - norm)).astype(np.uint8), cv.COLORMAP_TURBO)
+    image[~valid] = 0
+    return image, float(lo), float(hi)
+
 def parse_prompt(text):
         """Turn a raw CLI/stdin string into the ``texts`` list FastSAM expects."""
         if not text:
@@ -97,6 +109,7 @@ class FastSAMNode(Node):
         self.rays = None      # (H, W, 2) normalized camera rays
         self.plane = None     # last valid (normal, offset)
         self.last_cloud = None   # (points, instance ids) of the most recent frame
+        self.last_frame = None   # inputs and intermediate results of the most recent frame, for ~/capture
 
         name = self.get_parameter('device').value
         model_file = self.get_parameter('model').value
@@ -124,6 +137,7 @@ class FastSAMNode(Node):
             QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
 
         self.snapshot_srv = self.create_service(Trigger, '~/snapshot', self.snapshot_callback)
+        self.capture_srv = self.create_service(Trigger, '~/capture', self.capture_callback)
 
         self.texts = parse_prompt(self.prompt)
         self.palette = color_palette(32)
@@ -183,6 +197,46 @@ class FastSAMNode(Node):
         response.success = written > 0
         response.message = (f'Wrote {written} objects to {folder}' if written
                             else f'No instance reached {self.snapshot_min_points} points.')
+        self.get_logger().info(response.message)
+        return response
+
+    def capture_callback(self, request, response):
+        """Write the pipeline stages of the latest frame as PNGs (headless: no window needed)."""
+        if self.last_frame is None:
+            response.success = False
+            response.message = 'No frame processed yet.'
+            return response
+
+        f = self.last_frame
+        color, depth = f['color'], f['depth']
+        folder = os.path.join(CAPTURE_PATH, time.strftime('%Y%m%d_%H%M%S'))
+        os.makedirs(folder, exist_ok=True)
+
+        depth_image, lo, hi = colorize_depth(depth, depth > 0)
+        filtered = np.zeros_like(color)
+        filtered[f['above']] = color[f['above']]
+        images = {
+            '1_rgb.png': color,
+            '2_depth.png': depth_image,
+            '3_ransac_filtered.png': filtered,
+            '4_masks.png': overlay_masks(color.copy(), f['masks'], self.palette),
+        }
+        failed = [name for name, image in images.items()
+                  if not cv.imwrite(os.path.join(folder, name), image)]
+
+        # Metadata for figure captions.
+        plane = 'none' if f['plane'] is None else \
+            ' '.join(f'{v:+.4f}' for v in (*f['plane'][0], f['plane'][1]))
+        with open(os.path.join(folder, 'info.txt'), 'w') as fh:
+            fh.write(f"prompt: {', '.join(f['texts']) if f['texts'] else '(segment everything)'}\n"
+                     f"masks: {len(f['masks'])}\n"
+                     f"depth_colormap_range_m: {lo:.3f} {hi:.3f}\n"
+                     f"plane_nx_ny_nz_d: {plane}\n"
+                     f"plane_clearance_m: {self.plane_clearance}\n")
+
+        response.success = not failed
+        response.message = (f'Saved {len(images)} images to {folder}' if not failed
+                            else f'Failed to write {failed} in {folder}')
         self.get_logger().info(response.message)
         return response
 
@@ -323,6 +377,9 @@ class FastSAMNode(Node):
         if self.plane is not None:
             normal, offset = self.plane
             self.plane_pub.publish(Float64MultiArray(data=[*map(float, normal), float(offset)]))
+
+        self.last_frame = {'color': color, 'depth': depth, 'above': above, 'masks': masks,
+                           'texts': self.texts, 'plane': self.plane}
 
         count = len(masks)
         if self.show_window:

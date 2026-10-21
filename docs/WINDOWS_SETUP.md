@@ -59,42 +59,81 @@ If you are a VPN user (personal or corporative) and you are working with a remot
 
 **Problem**: VPN tunnels (private and encrypted connections that allow data to travel safely between a device and a server through a public network) **do not route multicast traffic**. Since ROS2 uses Data Distribution Service (DDS) as its communication middleware, which relies on **multicast UDP** to automatically discover nodes in the network, DDS may bind to the wrong network interface (commonly LAN instead of VPN), preventing nodes to find each other and making ROS2 communication impossible.
 
-**Solution**: Replacing multicast discovery with explicit unicast communication through ROS2 static peers.
+**Solution**: Use CycloneDDS with multicast disabled and explicit local/remote unicast peers.
 
-> **Important**: *The following steps are integrated into `ros2_vpn_setup.sh` file. **Save and adjust this script on both machines** so it will set all environment variables and configurations automatically.*
->
->```bash
->source ros2_vpn_setup.sh auto
->```
+### 1. Configure both hosts automatically
 
-### 1. Identify your VPN Network Interface and IPs
-The VPN IPs are **not** the ones that appears on your Network & internet settings information (if the server has no connection to a VPN, get its main network interface and IP).
+Use the repository's [VPN setup script](../scripts/ros2_vpn_setup.sh) on **both machines**. It discovers the local IPv4 address and interface from the system route to the remote IP; no addresses or interface names need to be edited in the script.
+
+Prerequisites: Bash, `ip` (iproute2), `ping` (iputils-ping), a sourced ROS 2 installation and a built workspace containing `install/setup.bash`. Install the CycloneDDS RMW if needed:
+
 ```bash
-# On both machines
+sudo apt install ros-jazzy-rmw-cyclonedds-cpp
+```
+
+After connecting the VPN, run these commands from the repository root, replacing the placeholders (including angle brackets):
+
+```bash
+# On host A: supply host B's reachable IPv4.
+source scripts/ros2_vpn_setup.sh setup <HOST_B_IPV4>
+
+# On host B: supply host A's reachable IPv4.
+source scripts/ros2_vpn_setup.sh setup <HOST_A_IPV4>
+```
+
+The remote IP is mandatory and has **no default**. `ROS_DOMAIN_ID` defaults to **42** on each setup, even if the shell previously used another domain. To choose a different domain, supply a third argument on both hosts:
+
+```bash
+source scripts/ros2_vpn_setup.sh setup <REMOTE_IPV4> 7
+source scripts/ros2_vpn_setup.sh status
+source scripts/ros2_vpn_setup.sh reset
+bash scripts/ros2_vpn_setup.sh --help
+```
+
+Domain IDs must be decimal integers from 0 to 232. On Linux, prefer 0-101 to avoid overlap with ephemeral UDP ports; DDS participant counts and other domains can also cause port conflicts. Both hosts must use the same domain.
+
+- Use **`source`** for setup/reset so the current shell inherits the changes; executing them with `bash` is rejected.
+- Setup selects the route's `dev` and `src`, verifies the IP belongs to that interface, binds CycloneDDS to both that interface and address, and requires a successful ping from that source IP. Missing routes or blocked ICMP cause a nonzero return, even if UDP might otherwise work. A route and ping do **not** prove VPN use or DDS connectivity: verify the selected interface and source in the output.
+- The script loads the repository's `install/setup.bash`, writes `cyclonedds_config.xml` atomically in the repository root, exports the ROS/DDS settings, then starts the daemon after stopping the previous domain's daemon. Both paths are independent of the current directory; use an absolute script path when outside the repository.
+- `status` requires neither ROS 2 nor network access. It shows current settings and the XML referenced by a local-file `CYCLONEDDS_URI`; without an active URI it labels the repository XML as inactive.
+- `reset` takes no IP/domain, stops the current domain's daemon and clears the ROS/DDS variables, but **keeps the XML**. If ROS 2 is unavailable or daemon shutdown fails, it still clears the environment and returns an error.
+- Other failures return nonzero with diagnostics rather than closing the sourced shell. As with any sourced command, a caller's own `set -e` policy can exit on a nonzero return. Daemon startup failure leaves exported settings in place and explicitly reports incomplete setup.
+- Setup/reset affect only the current terminal and future child processes. Restart existing nodes and source setup in each terminal used for ROS 2.
+- Generated XML stays local and is ignored by Git. Never put particular host IPs into the script or committed examples.
+
+### 2. Verify discovery and data in both directions
+
+After setup in each terminal, run a talker on host A and a listener on host B:
+
+```bash
+# Host A
+ros2 run demo_nodes_cpp talker
+
+# Host B
+ros2 run demo_nodes_cpp listener
+```
+
+Check that the listener receives messages, then reverse the host roles. In another configured terminal, inspect `ros2 node list`, `ros2 topic list` and `ros2 topic info /chatter`. Install the ROS demo packages if absent. Ping alone is not an acceptance test: VPN routing and firewall rules must allow bidirectional DDS UDP discovery **and** user data. This live test requires access to both machines.
+
+### Manual diagnostics (not additional setup steps)
+
+To inspect the addresses and the route selected by Linux:
+
+```bash
 ip addr show
-
-# Try bilateral communication
-ping <remote_vpn_ip>    # On WSL
-ping <local_vpn_ip>     # On server
+ip -4 route get <REMOTE_IPV4>
+ping -n -c 1 -W 2 -I <LOCAL_IPV4> <REMOTE_IPV4>
 ```
 
-### 2. Create CycloneDDS configurations file
-CycloneDDS is a DDS implementation that allows an easier unicast configuration for small multi-node networks.
+The generated XML has the following structure. The placeholders below are illustrative; do not copy them literally as XML:
 
-First, create CycloneDDS configurations file on **both** proyect root path and the RealSense workspace
-```bash
-(project_dir)$ nano cyclonedds_config.xml
-```
-
-Then paste the following XML and adjust the variables depending on your case:
 ```xml
 <?xml version="1.0" encoding="UTF-8" ?>
 <CycloneDDS>
   <Domain>
     <General>
       <Interfaces>
-        <!--NETWORK_INTERFACE must match with gotten one from ip addr show for that machine-->
-        <NetworkInterface name="<NETWORK_INTERFACE>" priority="default" multicast="false"/>
+        <NetworkInterface name="<NETWORK_INTERFACE>" address="<LOCAL_VPN_IP>" priority="default" multicast="false"/>
       </Interfaces>
       <AllowMulticast>false</AllowMulticast>
       <EnableMulticastLoopback>false</EnableMulticastLoopback>
@@ -111,19 +150,13 @@ Then paste the following XML and adjust the variables depending on your case:
 </CycloneDDS>
 ```
 
-### Setup environment variables
+For manual diagnosis, these are the settings applied by setup (the script also loads the overlay and restarts the daemon):
 
-If you do not have CycloneDDS for ROS2 implementation, install it with the following command:
-```bash
-sudo apt install ros-jazzy-rmw-cyclonedds-cpp
-```
-
-Then export the ROS environment variables in **both** systems
 ```bash
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 export CYCLONEDDS_URI=file:///path/to/cyclonedds_config.xml
 export ROS_DOMAIN_ID=42   # Both must match!
-export ROS_STATIC_PEERS="<REMOTE_IP>,<LOCAL_IP>"
+export ROS_STATIC_PEERS="<LOCAL_IP>;<REMOTE_IP>"
 unset ROS_AUTOMATIC_DISCOVERY_RANGE
 ```
 

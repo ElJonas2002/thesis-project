@@ -40,9 +40,13 @@ def generate_launch_description():
                                            description='Merge grid size for superdec_node')
     arg_merge_cap = DeclareLaunchArgument('merge_cap', default_value='192',
                                           description='Grid merge exponent')
+    arg_lm = DeclareLaunchArgument('lm', default_value='false',
+                                   description='Levenberg-Marquardt refinement after the merge (CUDA only)')
+    arg_lm_steps = DeclareLaunchArgument('lm_steps', default_value='5',
+                                         description='Levenberg-Marquardt iterations')
     arg_resolution = DeclareLaunchArgument('resolution', default_value='12',
                                              description='Marker mesh resolution for superquadrics visualization')
-    arg_rate = DeclareLaunchArgument('rate', default_value='1.0',
+    arg_rate = DeclareLaunchArgument('rate', default_value='0.0',
                                       description='Timer rate for superdec_node (Hz)')
     arg_max_instances = DeclareLaunchArgument('max_instances', default_value='8',
                                                description='Maximum number of superquadrics instances to build')
@@ -71,6 +75,8 @@ def generate_launch_description():
     merge_tolerance = LaunchConfiguration('merge_tol')
     merge_grid = LaunchConfiguration('merge_grid')
     merge_cap = LaunchConfiguration('merge_cap')
+    lm = LaunchConfiguration('lm')
+    lm_steps = LaunchConfiguration('lm_steps')
     resolution = LaunchConfiguration('resolution')
     rate = LaunchConfiguration('rate')
     min_points = LaunchConfiguration('min_points')
@@ -109,6 +115,8 @@ def generate_launch_description():
                          'merge_tol': merge_tolerance,
                          'merge_grid': merge_grid,
                          'merge_cap': merge_cap,
+                         'lm': lm,
+                         'lm_steps': lm_steps,
                          'resolution': resolution,
                          'rate': rate,
                          'min_points': min_points,
@@ -132,6 +140,8 @@ def generate_launch_description():
         arg_merge_tolerance,
         arg_merge_grid,
         arg_merge_cap,
+        arg_lm,
+        arg_lm_steps,
         arg_resolution,
         arg_rate,
         arg_min_points,
