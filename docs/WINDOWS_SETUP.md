@@ -65,7 +65,7 @@ If you are a VPN user (personal or corporative) and you are working with a remot
 
 Use the repository's [VPN setup script](../scripts/ros2_vpn_setup.sh) on **both machines**. It discovers the local IPv4 address and interface from the system route to the remote IP; no addresses or interface names need to be edited in the script.
 
-Prerequisites: Bash, `ip` (iproute2), `ping` (iputils-ping), a sourced ROS 2 installation and a built workspace containing `install/setup.bash`. Install the CycloneDDS RMW if needed:
+**Prerequisites**: Bash, `ip` (iproute2), `ping` (iputils-ping), a sourced ROS 2 installation and a built workspace containing `install/setup.bash`. Install the CycloneDDS RMW if needed:
 
 ```bash
 sudo apt install ros-jazzy-rmw-cyclonedds-cpp
@@ -75,10 +75,10 @@ After connecting the VPN, run these commands from the repository root, replacing
 
 ```bash
 # On host A: supply host B's reachable IPv4.
-source scripts/ros2_vpn_setup.sh setup <HOST_B_IPV4>
+source relative/path/to/ros2_vpn_setup.sh setup <HOST_B_IPV4>
 
 # On host B: supply host A's reachable IPv4.
-source scripts/ros2_vpn_setup.sh setup <HOST_A_IPV4>
+source relative/path/to/ros2_vpn_setup.sh setup <HOST_A_IPV4>
 ```
 
 The remote IP is mandatory and has **no default**. `ROS_DOMAIN_ID` defaults to **42** on each setup, even if the shell previously used another domain. To choose a different domain, supply a third argument on both hosts:
