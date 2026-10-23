@@ -1,6 +1,6 @@
 # Thesis project logbook — 3D perception for VLA-driven robotic manipulation
 
-> **Last update**: 2026-10-13
+> **Last update**: 2026-10-22
 
 ## 1. Project goal
 
@@ -177,6 +177,8 @@ The objective separates cube from cylinder; **the bias is in the network**, whic
 
 #### Step 10 — Closed-form primitive merging (adopted)
 
+> **Partly superseded by Step 10c (2026-10-22).** The PCA-only rotation, the mean/max centre and extents, the `cand / max(residual[a], residual[b])` criterion and the refit of all groups described below are retired. The idea (closed-form fit + grid over exponents, greedy pairwise merge over the network's assignment) is kept.
+
 Key observation: **9 of the 11 parameters have a closed-form estimate**. For a group of points, the centroid gives the translation, the PCA eigenvectors give the rotation and the per-axis maximum gives the extents. Only the two exponents and a global shrink factor need searching.
 
 `fit_groups` evaluates, for all groups in one batched kernel:
@@ -190,7 +192,7 @@ ratio = cand / max(residual[a], residual[b])   # relative: object size cancels o
 if ratio.min() > tol: break                     # tol = 1.15
 ```
 
-Each round fits **all pairs in one call** and accepts only the best merge. The surviving groups are refit on a finer 13×13 grid with up to 768 points each.
+Each round fits **all pairs in one call** and accepts only the best merge. The surviving groups are refit on a finer 13×13 grid with up to 768 points each. *(Criterion and refit of all groups retired in Step 10c; only merged groups are refitted now.)*
 
 | | Retired Adam refinement | Closed-form merge |
 |---|---|---|
@@ -223,6 +225,73 @@ Measured on snapshot `20261015_111823` (`--canonical --denoise --complete --unif
 
 LM was accepted on every primitive. It mainly corrects extents, centre and orientation; the exponents barely move, so it does **not** fix the box bias of Step 9.
 
+#### Step 10c — Merge redesign
+
+**Problem (seen in RViz).** Without merge, the network's primitives reproduce the object (e.g. the cube) but are too many; with the Step 10 merge there are fewer primitives, but they deform into rounded blobs.
+
+**Diagnosed causes in the Step 10 merge:**
+
+1. `merge_stage` refitted **all** groups in closed form, discarding the network's parameters even for groups that were never merged.
+2. Rotation came only from PCA, which is arbitrary for isotropic shapes. On a synthetic cube (half-side 0.4) the fit was rotated, inflated and rounded: scale 0.51–0.64, $\varepsilon$ 1.3–1.75, radial error ~0.052 vs. 0.0023 for the true parameters.
+3. Centre = point mean and extent = max, both biased by uneven depth-camera density and outliers.
+4. `ratio = cand / max(residual[a], residual[b])` with `residual[a] = cand` after each merge compounded the tolerance (~$1.15^k$); there was no adjacency check.
+5. Merge subsampling used the runner's shared `rng`, so it was not reproducible.
+
+**New design** ([superdec_utils.py](../src/intel_realsense/intel_realsense/superdec_utils.py): `fit_groups`, `merge_object`, `merge_stage`, `table_up`):
+
+- **Unmerged groups keep the network's parameters exactly.** Only merged groups are refitted (grid $2\cdot\text{grid}+3$, up to $4\cdot\text{cap}$ points).
+- **No dropped points.** Points of primitives with < 32 points or switched off are given to the nearest surviving leaf (the old merge left 0.7–1.3 % of points unassigned; now 0 %).
+- **Rotation candidates** in `fit_groups`, each tried in 3 cyclic axis permutations: PCA; a minimum-area footprint rectangle around the table normal `up` ($+Y$ after the canonical rotation, from `table_up`); and seed rotations (network rotations of the 2 largest leaves). Axes are estimated on "core" points (the `trim` fraction farthest from the median is dropped).
+- **Centre and extents** from the per-axis `trim` / `1 − trim` quantiles (bounding-box midpoint) instead of mean/max.
+- **Merge criterion.** A union is accepted only if **both** errors stay $\le$ `tol` × the baseline of its leaves' primitives *together* (each leaf represented by the better of its network primitive and its own closed-form fit):
+  - *Fit*: mean radial distance of the union points. Baseline: each point to the closest leaf primitive (neighbouring primitives overlap and cover each other's points, so a leaf vs. only its own primitive understates what a merge loses).
+  - *Coverage*: area-weighted mean distance from surface samples to the nearest point of the whole object. The baseline ignores samples buried inside another leaf of the union. Area weighting matters: an angular $(\eta, \omega)$ grid puts nearly all samples on edges/corners when $\varepsilon \approx 0.1$, which penalised sharp boxes.
+  - The baseline depends only on the leaves, so the tolerance no longer compounds. Baselines are floored at `MERGE_FLOOR` = 5e-3 (normalised units; ~0.5–1.25 mm on 0.1–0.25 m objects).
+  - Only pairs whose closest points lie within `adjacency` (normalised units) are tested.
+- **Deterministic merge.** Each call uses a fresh `np.random.default_rng(seed)`, so the same network output always merges identically (verified). The SuperDec forward itself is **not** deterministic on CUDA (two forwards on the same input differ, verified), so frame-to-frame variation remains upstream.
+
+**Parameters** (ROS param / launch arg / `SuperDecRunner` kwarg; bench flag in brackets). The user approved the new parameters and the new default:
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `merge_tol` [`--merge-tol`] | **1.3** (was 1.15) | Max ratio vs. the leaf ensemble, on fit **and** coverage (meaning changed) |
+| `merge_trim` [`--merge-trim`] | 0.01 | Quantile trimmed for axes, centre and extents of a merged primitive |
+| `merge_adjacency` [`--merge-adjacency`] | 0.05 | Max gap between primitives that may merge (normalised units) |
+
+**Bench.** [superdec_offline.py](../scripts/superdec_offline.py) now uses the runner's merge seeding, passes `up`, and reports per object the #sq before merge, coverage mean and p95 (mm; area-uniform mesh samples → nearest input point), chamfer, unassigned % and an optional `--json` dump. It needs the venv on `PATH` (ninja, for the PVCNN JIT extension): `export PATH=$PWD/.venv/bin:$PATH`.
+
+**Tests.** 24 pytest tests in [test_superdec_merge.py](../src/intel_realsense/test/test_superdec_merge.py) (CPU synthetic + 1 CUDA LM test): cube on table / free pose with seed, cylinder, uneven density + outliers, cube split in 2/4 (with/without noise) merges back, separate objects never merge, L-shape stays 2, curved chain does not collapse, unmerged groups keep network parameters exactly, orphan points reassigned, fallback when all groups are tiny, batch padding, determinism, area-weighted samples, `lm_stage` after merge. Plugin autoload must be disabled (the ROS `launch_testing` plugin needs `lark`, absent in the venv):
+
+```bash
+cd src/intel_realsense && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 ../../.venv/bin/python -m pytest test/test_superdec_merge.py
+```
+
+**Protocol.** 4 captures of the **same** scene (`snapshots/20261022_*`: obj01 cube, obj02 robotic hand, obj03 hand drill, obj04 bottle), flags `--canonical --denoise --complete --uniform`. `20261022_150557` was used for calibration only; `150609`, `150616`, `150938` are held out. "Old" = the HEAD (Step 10) merge run with the new bench through a temporary worktree.
+
+**Calibration** (`150557`, final design): `tol` 1.15 → cube stays at 2 primitives; **1.3** → cube becomes 1 box, other objects unchanged (cube recon 2.79 vs. 2.46 mm without merge); 1.5 → bottle and drill merge badly (bottle +1.6 mm, drill coverage p95 24 mm). `trim` 0 was worse than 0.01; 0.05 merged hand/bottle with +0.6/+0.7 mm.
+
+**Held-out results** (medians over the 3 held-out captures; recon = radial error; all distances in mm):
+
+| Object | Merge | #sq | Recon | Coverage | Coverage p95 | `eps_prof` / `eps_sect` |
+|---|---|---|---|---|---|---|
+| Cube | off | 4 | 2.69 | 2.75 | 5.99 | 0.16 / 0.28 |
+| | old | 1 | 5.27 | 4.49 | 9.20 | 1.05 / 1.45 |
+| | **new** | **1** | **2.57** | 2.84 | 7.98 | 0.15 / 0.25 |
+| Hand | off | 3 | 5.63 | 4.09 | 10.66 | |
+| | old | 1 | 9.22 | 6.19 | 13.56 | |
+| | **new** | 3 | 5.63 | 4.09 | 10.32 | (unchanged) |
+| Drill | off | 5 | 7.56 | 5.29 | 12.52 | |
+| | old | 2 | 9.83 | 6.24 | 16.76 | |
+| | **new** | 5 [4–5] | 7.65 | 5.31 | 12.34 | |
+| Bottle | off | 3 | 5.03 | 3.82 | 8.30 | |
+| | old | 1 | 7.19 | 3.85 | 8.47 | |
+| | **new** | 2 | 5.90 | 4.58 | 15.20 | |
+
+- **Acceptance** (plan criterion: recon ≤ off + 0.5 mm): met for cube, hand and drill; **not met for the bottle** (+0.87 mm median; it merges 3 → 2 and coverage p95 nearly doubles).
+- **Time:** merge ~0.28–0.33 s (old) vs. ~0.5–0.67 s (new) for 4 objects (bench, RTX 4080 Laptop); the user accepted the increase. Node end-to-end (warm): ~0.4 s for 4 objects, ~0.8 s with `lm:=true`; LM accepted all primitives.
+- **Tried and rejected (no gain):** letting a leaf primitive "absorb" a union instead of refitting (bottle merged to 1 at `tol` 1.3, cube worse at 1.15); tail-mean coverage over the worst 20 % of area (bottle unchanged, cube sometimes 2).
+- **Limitations:** evidence is preliminary (one scene, 1 calibration + 3 held-out captures, a single run each with a non-deterministic network). `tol` trades parsimony vs. fidelity: the cube's final merge ratios (~1.15–1.3) overlap with the bottle's merges. See Open challenge E.
+
 ### 2.3 ROS 2 integration
 
 #### Step 11 — `superdec_node`
@@ -234,6 +303,7 @@ LM was accepted on every primitive. It mainly corrects extents, centre and orien
 - **Batching**: every instance with ≥ 512 points (up to 8) is resampled to `(4096, 3)` and stacked into `(K, 4096, 3)` for **one** forward pass.
 - **Output frame**: the canonical rotation and normalisation are undone, so primitives land back in the camera frame.
 - **Triggering**: a 1 Hz timer plus an on-demand `~/decompose` service. Inputs use a reentrant callback group and the work a mutually exclusive one, under a `MultiThreadedExecutor`, so new clouds keep arriving while inference runs. A failed frame is logged without killing the node.
+- **Merge parameters**: `merge`, `merge_tol` (1.3), `merge_grid` (5), `merge_cap` (192), `merge_trim` (0.01), `merge_adjacency` (0.05), `lm` (false), `lm_steps` (5); all exposed in the launch file. See Step 10c.
 - **Visualisation**: `MarkerArray` on `~/primitives`, one `TRIANGLE_LIST` per primitive (12 × 24 parametric grid shared by all primitives), a `DELETEALL` first, and golden-angle colours per instance.
 
 #### Step 12 — Launch file
@@ -354,7 +424,7 @@ SuperDec was trained on ShapeNet, where objects stand upright with $+Y$ up. The 
 
 ### Why closed-form merging instead of gradient refinement?
 
-For a perception module feeding a planner, latency dominates. The Adam refinement was 2× more accurate but 400× slower than the closed-form merge. The closed form keeps the PCA-seeded, permutation-aware fit that fixed the cylinder case and pays only for a grid of 225 candidates per group.
+For a perception module feeding a planner, latency dominates. The Adam refinement was 2× more accurate but 400× slower than the closed-form merge. The closed form keeps the PCA-seeded, permutation-aware fit that fixed the cylinder case and pays only for a grid of 225 candidates per group. Since Step 10c it also tries table-aligned and network-seeded rotations and refits only merged groups, so the network's primitives are kept wherever merging does not pay off.
 
 ### Why hand-written serialisation?
 
@@ -392,9 +462,17 @@ Even FastSAM-x yields only 62% of objects with F ≥ 0.75 and 0.84 completeness.
 
 Primitives are only published as `MarkerArray` for RViz. A typed message (per instance: scale, exponents, pose) and a fixed robot base frame are needed before the VLA or a grasp planner can consume them.
 
+### E — Merge tolerance and reproducibility (Step 10c)
+
+- **Bottle over-merge**: at `merge_tol` 1.3 the bottle merges 3 → 2 (+0.87 mm recon, coverage p95 8.30 → 15.20 mm). A single `tol` cannot separate it from the cube, whose final merge ratios (~1.15–1.3) overlap with the bottle's.
+- **Preliminary evidence**: one scene, 1 calibration + 3 held-out captures, one run each. A larger, multi-scene evaluation is pending.
+- **SuperDec forward is non-deterministic on CUDA**: the merge is reproducible for a given network output, but frame-to-frame variation remains upstream.
+- `complete_shell` still uses the runner's shared `rng` (not reseeded per call).
+- Pre-existing lint debt (pep257/flake8) in `superdec_utils.py` and `sq_launch.py` is unchanged.
+
 ---
 
-## 7. Task status
+## 6. Task status
 
 | Task | Status |
 |---|---|
@@ -408,7 +486,11 @@ Primitives are only published as `MarkerArray` for RViz. A typed message (per in
 | SuperDec build against torch 2.14 | ✅ |
 | Offline SuperDec bench + radial-error metric | ✅ (snapshot service + PLY export) |
 | Adam refinement of primitives | ⚠️ implemented and retired (56 s) |
-| Closed-form primitive merging | ✅ (0.13 s) |
+| Closed-form primitive merging | ✅ (0.13 s; redesigned in Step 10c, ~0.5–0.67 s for 4 objects) |
+| Merge unit tests (`test_superdec_merge.py`, 24 tests) | ✅ |
+| Bottle over-merge at `merge_tol` 1.3 | ⬜ pending (challenge E) |
+| Multi-scene evaluation of the merge | ⬜ pending |
+| Deterministic `complete_shell` sampling | ⬜ pending |
 | `superdec_node` with batching and markers | ✅ |
 | Launch file `sq_launch.py` | ✅ |
 | Headless prompting (`prompt_cli`) | ✅ |

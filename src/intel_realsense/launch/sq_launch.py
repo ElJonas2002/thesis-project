@@ -32,21 +32,29 @@ def generate_launch_description():
                                          description='Enable complete mode for superdec_node')
     arg_merge = DeclareLaunchArgument('merge', default_value='true',
                                        description='Enable merge mode for superdec_node')
-    arg_merge_tolerance = DeclareLaunchArgument('merge_tol', default_value='1.15',
-                                           description='Merge tolerance for superdec_node')
+    arg_merge_tolerance = DeclareLaunchArgument(
+        'merge_tol', default_value='1.3',
+        description='Accept a merge while its fit and coverage errors stay under '
+                    'tol x those of the primitives it replaces')
     arg_superdec_verbose = DeclareLaunchArgument('verbose', default_value='false',
                                                  description='Enable verbose output for superdec_node')
     arg_merge_grid = DeclareLaunchArgument('merge_grid', default_value='5',
                                            description='Merge grid size for superdec_node')
     arg_merge_cap = DeclareLaunchArgument('merge_cap', default_value='192',
-                                          description='Grid merge exponent')
+                                          description='Points per group during the merge search')
+    arg_merge_trim = DeclareLaunchArgument('merge_trim', default_value='0.01',
+                                           description='Fraction of points ignored per side when '
+                                                       'fitting a merged primitive')
+    arg_merge_adjacency = DeclareLaunchArgument(
+        'merge_adjacency', default_value='0.05',
+        description='Max gap between primitives that may merge, in normalised object units')
     arg_lm = DeclareLaunchArgument('lm', default_value='false',
                                    description='Levenberg-Marquardt refinement after the merge (CUDA only)')
     arg_lm_steps = DeclareLaunchArgument('lm_steps', default_value='5',
                                          description='Levenberg-Marquardt iterations')
     arg_resolution = DeclareLaunchArgument('resolution', default_value='12',
                                              description='Marker mesh resolution for superquadrics visualization')
-    arg_rate = DeclareLaunchArgument('rate', default_value='0.0',
+    arg_rate = DeclareLaunchArgument('rate', default_value='20.0',
                                       description='Timer rate for superdec_node (Hz)')
     arg_max_instances = DeclareLaunchArgument('max_instances', default_value='8',
                                                description='Maximum number of superquadrics instances to build')
@@ -75,6 +83,8 @@ def generate_launch_description():
     merge_tolerance = LaunchConfiguration('merge_tol')
     merge_grid = LaunchConfiguration('merge_grid')
     merge_cap = LaunchConfiguration('merge_cap')
+    merge_trim = LaunchConfiguration('merge_trim')
+    merge_adjacency = LaunchConfiguration('merge_adjacency')
     lm = LaunchConfiguration('lm')
     lm_steps = LaunchConfiguration('lm_steps')
     resolution = LaunchConfiguration('resolution')
@@ -115,6 +125,8 @@ def generate_launch_description():
                          'merge_tol': merge_tolerance,
                          'merge_grid': merge_grid,
                          'merge_cap': merge_cap,
+                         'merge_trim': merge_trim,
+                         'merge_adjacency': merge_adjacency,
                          'lm': lm,
                          'lm_steps': lm_steps,
                          'resolution': resolution,
@@ -140,6 +152,8 @@ def generate_launch_description():
         arg_merge_tolerance,
         arg_merge_grid,
         arg_merge_cap,
+        arg_merge_trim,
+        arg_merge_adjacency,
         arg_lm,
         arg_lm_steps,
         arg_resolution,

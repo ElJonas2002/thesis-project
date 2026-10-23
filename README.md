@@ -89,18 +89,28 @@ For multi-machine ROS 2 over a VPN, configure both hosts with the [automatic Cyc
     - `spatial_filter`: Preserves edges and object features while smoothing the image to reduce noise without blurring it.  
     - `temporal_filter`: Reduces depth image noise by combining secuential frames with Exponential Mobile Average (EMA).
     - `decimation_filter`: Reduces depth image resolution and scene complexity to save data bandwidth and lower host CPU load.
+    - `rgb_camera.color_profile`: Modifies RBG image resolution and FPS.
+    - `depth_module.depth_profile`: Modifies Depth image resolution and FPS.
 
     ```sh
     . install/local_setup.bash
-    ros2 launch realsense2_camera rs_launch.py align_depth.enable:=true decimation_filter.enable:=true spatial_filter.enable:=true temporal_filter.enable:=true
+    ros2 launch realsense2_camera rs_launch.py align_depth.enable:=true \
+        decimation_filter.enable:=true \
+        spatial_filter.enable:=true \
+        temporal_filter.enable:=true \
+        rgb_camera.color_profile:=640,480,30 \
+        depth_module.depth_profile:=640,480,30
     ```
 
-    **Note**: *If the node warns a USB overflow multiple times, this means that bandwidth is too low to send RGB+D images at default resolution or FPS. You can reduce them by typing the following arguments*:
-    - `rgb_camera.color_profile`: Modifies RBG image resolution and FPS
-    - `depth_module.depth_profile`: Modifies Depth image resolution and FPS
+    **Note**: *If the node warns a USB overflow multiple times, this means that bandwidth is too low to send RGB+D images at default resolution or FPS. Try reducing both RGB and Depth image resolution as follows*:
 
     ```bash
-    ros2 launch realsense2_camera rs_launch.py align_depth.enable:=true spatial_filter.enable:=true temporal_filter.enable:=true decimation_filter.enable:=true rgb_camera.color_profile:=424x240x30 depth_module.depth_profile:=424x240x30
+    ros2 launch realsense2_camera rs_launch.py align_depth.enable:=true \
+        spatial_filter.enable:=true \
+        temporal_filter.enable:=true \
+        decimation_filter.enable:=true \
+        rgb_camera.color_profile:=424x240x30 \
+        depth_module.depth_profile:=424x240x30
     ```
 
 2. Open a second terminal and launch the superquadrics generator with the following command (*this launch file is intended to be a headless version; use the `show_window` argument to see an OpenCV debug window if yout system allows it*):
@@ -116,12 +126,14 @@ For multi-machine ROS 2 over a VPN, configure both hosts with the [automatic Cyc
     ros2 run intel_realsense prompt_cli
     ```
     - Press `t`  to write a **simple prompt** (*e.g. purple cube*) or **comma-separated simple prompts** (*e.g. orange cube, black drill, ...*) describing the object(s) you want the model to find. You are supposed to see the desired objects segmented with color masks in the OpenCV window.
+    - Press `s` to save captures of the raw RGB+D images, RGB with background removed and segmentation masks.
     - Press `c` to segment all objects in the scene.
     - Press `q` to exit.
   5. To visualize binary segmentation mask, supequadrics and point clouds, open RViz2 and load the [RViz2 Visualization file](visualization/sq_visualization.rviz).
 ## 🪾️ Project Structure
 ```
 .
+├── .github                     # GitHub Copilot agents
 ├── doc                         # Project documentation files
 │   └── metrics_sq              # Superquadrics Module Metrics
 ├── isaacsim                    # Related files for Isaac Sim simulation

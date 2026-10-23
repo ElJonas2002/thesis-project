@@ -102,7 +102,7 @@ class SuperDecNode(Node):
     def __init__(self):
         super().__init__('superdec_node')
         self.declare_parameter('device', '')
-        self.declare_parameter('rate', 1.0)
+        self.declare_parameter('rate', 20.0)
         self.declare_parameter('min_points', 512)
         self.declare_parameter('max_instances', 8)
         self.declare_parameter('resolution', 12)
@@ -111,9 +111,11 @@ class SuperDecNode(Node):
         self.declare_parameter('canonical', True)
         self.declare_parameter('uniform', True)
         self.declare_parameter('merge', True)
-        self.declare_parameter('merge_tol', 1.15)
+        self.declare_parameter('merge_tol', 1.3)
         self.declare_parameter('merge_grid', 5)
         self.declare_parameter('merge_cap', 192)
+        self.declare_parameter('merge_trim', 0.01)
+        self.declare_parameter('merge_adjacency', 0.05)
         self.declare_parameter('lm', False)
         self.declare_parameter('lm_steps', 5)
         self.declare_parameter('verbose', False)
@@ -141,6 +143,8 @@ class SuperDecNode(Node):
             merge_tol=self.get_parameter('merge_tol').value,
             merge_grid=self.get_parameter('merge_grid').value,
             merge_cap=self.get_parameter('merge_cap').value,
+            merge_trim=self.get_parameter('merge_trim').value,
+            merge_adjacency=self.get_parameter('merge_adjacency').value,
             lm=self.get_parameter('lm').value,
             lm_steps=self.get_parameter('lm_steps').value)
         if self.get_parameter('lm').value and not self.runner.lm:

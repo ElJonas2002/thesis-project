@@ -200,41 +200,123 @@ def radial_distance(local, extent, e_prof, e_sect):
         Radial distance of each point from the superquadric surface.
 
     """
-    logs = 2.0 * torch.log((local / extent).abs().clamp_min(1e-9))
-    log_xy = (e_sect / e_prof) * torch.logaddexp(logs[..., 0] / e_sect, logs[..., 1] / e_sect)
-    log_f = torch.logaddexp(log_xy, logs[..., 2] / e_prof)
+    log_f = log_inside_outside(local, extent, e_prof, e_sect)
     return local.norm(dim=-1) * (torch.exp(-0.5 * e_prof * log_f) - 1.0).abs()
 
 
-def fit_groups(pts, mask, grid=5, shrinks=(0.85, 0.95, 1.0), budget=4_000_000):
+def log_inside_outside(local, extent, e_prof, e_sect):
+    """Log of the superquadric inside-outside function: negative inside, zero on the surface."""
+    logs = 2.0 * torch.log((local / extent).abs().clamp_min(1e-9))
+    log_xy = (e_sect / e_prof) * torch.logaddexp(logs[..., 0] / e_sect, logs[..., 1] / e_sect)
+    return torch.logaddexp(log_xy, logs[..., 2] / e_prof)
+
+
+# Floor for a merge baseline, in normalised units (~0.5-1.25 mm on 0.1-0.25 m objects), about the
+# depth noise: below it, residuals are grid and subsampling jitter and their ratio means nothing.
+MERGE_FLOOR = 5e-3
+
+# Cyclic permutations keep the determinant, so a permuted rotation is still a rotation.
+AXIS_PERMUTATIONS = ((0, 1, 2), (1, 2, 0), (2, 0, 1))
+
+
+def box_rotations(pts, mask, up):
+    """
+    Build one rotation per group from `up` and the footprint's minimum-area rectangle.
+
+    `up` becomes the profile axis and the rectangle sets the yaw. For an object resting on
+    the table only the yaw is unknown, and the footprint rectangle recovers it even for a
+    cube, whose isotropic covariance leaves the PCA axes arbitrary.
+    """
+    up = np.asarray(up, dtype=np.float64)
+    up = up / np.linalg.norm(up)
+    plane = canonical_rotation(up)[[0, 2]]
+    flat = (pts.double() @ torch.as_tensor(plane.T, device=pts.device)).cpu().numpy()
+    keep = mask.cpu().numpy()
+
+    rots = np.empty((pts.shape[0], 3, 3))
+    for g in range(pts.shape[0]):
+        _, _, angle = cv.minAreaRect(flat[g][keep[g]].astype(np.float32))
+        theta = np.deg2rad(angle)
+        u = np.cos(theta) * plane[0] + np.sin(theta) * plane[1]
+        rots[g] = np.stack([u, np.cross(up, u), up], axis=1)
+    return torch.as_tensor(rots, dtype=pts.dtype, device=pts.device)
+
+
+def robust_bounds(local, mask, trim):
+    """Per-axis `trim` and `1 - trim` quantiles of the valid points, (G, R, 3) each."""
+    valid = mask[:, None, :, None]
+    ordered = local.masked_fill(~valid, float('inf')).sort(dim=2).values
+    last = (mask.sum(1).clamp_min(1) - 1).float()
+    lo = torch.floor(trim * last).long()
+    hi = torch.ceil((1.0 - trim) * last).long()
+
+    def pick(index):
+        index = index.view(-1, 1, 1, 1).expand(-1, local.shape[1], 1, 3)
+        return ordered.gather(2, index).squeeze(2)
+    return pick(lo), pick(hi)
+
+
+def core_mask(pts, mask, trim):
+    """Drop the `trim` fraction of points farthest from the median, which would skew the axes."""
+    if trim <= 0.0:
+        return mask
+    median = pts.masked_fill(~mask[..., None], float('nan')).nanmedian(1).values
+    dist = (pts - median[:, None]).norm(dim=-1).masked_fill(~mask, float('inf'))
+    rank = dist.argsort(1).argsort(1)
+    keep = torch.ceil((1.0 - trim) * mask.sum(1).float()).long().clamp_min(1)
+    return mask & (rank < keep[:, None])
+
+
+def fit_groups(pts, mask, grid=5, shrinks=(0.85, 0.95, 1.0), budget=4_000_000,
+               seeds=None, up=None, trim=0.0):
     """
     Fit one superquadric per padded group of points, without gradient descent.
 
-    Pose and extents are closed form (PCA of the group); only the two exponents and a
-    global shrink factor are searched, on a grid evaluated for every group at once. All
-    three axis permutations are tried because a squat cylinder has two near-equal radial
-    variances, so the order eigh returns is arbitrary and the profile axis can land inside
-    the cross-section, which is precisely where a box is the better fit.
+    Every candidate rotation is tried in its three axis permutations, because which axis is
+    the profile one decides between a box and a cylinder. Candidates are the PCA axes, the
+    footprint box around `up` when the table is known, and `seeds` (G, K, 3, 3), normally the
+    network's rotations, which stay meaningful where PCA is arbitrary (isotropic shapes).
+    Per rotation the centre and extents come from the `trim` quantiles of the local
+    coordinates, so neither the uneven density of a depth camera nor a stray point can shift
+    the box the way a point mean and a maximum do. Only the two exponents and a global
+    shrink factor are searched, on a grid evaluated for every group and rotation at once.
     """
     device = pts.device
     groups, count = pts.shape[0], pts.shape[1]
     weight = mask.float()
     total = weight.sum(1).clamp_min(1.0)
-    centre = (pts * weight[..., None]).sum(1) / total[:, None]
 
-    delta = (pts - centre[:, None]) * weight[..., None]
-    cov = delta.transpose(1, 2) @ delta / total[:, None, None]
+    # The axes come from the core points only; a handful of outliers can rotate both the
+    # covariance and the footprint rectangle away from every face of the object.
+    core = core_mask(pts, mask, trim)
+    core_weight = core.float()
+    core_total = core_weight.sum(1).clamp_min(1.0)
+    mean = (pts * core_weight[..., None]).sum(1) / core_total[:, None]
+
+    delta = (pts - mean[:, None]) * core_weight[..., None]
+    cov = delta.transpose(1, 2) @ delta / core_total[:, None, None]
     cov = cov + torch.eye(3, device=device) * 1e-9
-    axes = torch.linalg.eigh(cov).eigenvectors
+    bases = [torch.linalg.eigh(cov).eigenvectors[:, None]]
+    if up is not None:
+        bases.append(box_rotations(pts, core, up)[:, None])
+    if seeds is not None:
+        bases.append(seeds.to(device=device, dtype=pts.dtype))
+    bases = torch.cat(bases, 1)
 
-    perms = torch.tensor([[0, 1, 2], [1, 2, 0], [2, 0, 1]], device=device)
-    rot = axes[:, None].expand(groups, 3, 3, 3).gather(
-        3, perms.view(1, 3, 1, 3).expand(groups, 3, 3, 3))
+    perms = torch.tensor(AXIS_PERMUTATIONS, device=device)
+    rot = bases[:, :, None].expand(-1, -1, 3, -1, -1).gather(
+        4, perms.view(1, 1, 3, 1, 3).expand(groups, bases.shape[1], 3, 3, 3))
+    rot = rot.reshape(groups, -1, 3, 3).clone()
     # eigh may return a reflection; a superquadric is symmetric per axis, so flipping one is free.
     rot[..., 0] = rot[..., 0] * torch.where(torch.linalg.det(rot) < 0, -1.0, 1.0)[..., None]
+    rots = rot.shape[1]
 
-    local = torch.einsum('gpji,gmj->gpmi', rot, pts - centre[:, None])
-    extent = local.abs().masked_fill(~mask[:, None, :, None], 0.0).amax(2).clamp_min(1e-4)
+    local = torch.einsum('gpji,gmj->gpmi', rot, pts - mean[:, None])
+    lo, hi = robust_bounds(local, mask, trim)
+    middle = 0.5 * (lo + hi)
+    extent = (0.5 * (hi - lo)).clamp_min(1e-4)
+    local = local - middle[:, :, None]
+    centre = mean[:, None] + torch.einsum('gpij,gpj->gpi', rot, middle)
 
     axis = torch.linspace(0.1, 1.9, grid, device=device)
     shrink, e_prof, e_sect = (t.reshape(-1) for t in torch.meshgrid(
@@ -242,7 +324,7 @@ def fit_groups(pts, mask, grid=5, shrinks=(0.85, 0.95, 1.0), budget=4_000_000):
     combos = shrink.numel()
 
     scores = []
-    step = max(1, budget // (3 * combos * count * 3))
+    step = max(1, budget // (rots * combos * count * 3))
     for start in range(0, groups, step):
         chunk = slice(start, start + step)
         candidate = extent[chunk, :, None, None, :] * shrink.view(1, 1, combos, 1, 1)
@@ -258,7 +340,7 @@ def fit_groups(pts, mask, grid=5, shrinks=(0.85, 0.95, 1.0), budget=4_000_000):
         'scale': extent[rows, perm] * shrink[combo][:, None],
         'shape': torch.stack((e_prof[combo], e_sect[combo]), 1),
         'rotate': rot[rows, perm],
-        'trans': centre,
+        'trans': centre[rows, perm],
     }
     return params, score[rows, best]
 
@@ -275,49 +357,192 @@ def stack_groups(points, groups, cap, rng):
     return pts, mask
 
 
-def merge_object(points, groups, tol, rng, grid, cap):
+def surface_samples(params, resolution=16):
     """
-    Greedily merge primitives whose points a single superquadric still explains.
+    Sample each primitive's surface with area weights.
 
-    The retired refine stage cost ~19 s/object because each candidate pair triggered an
-    11-DOF Adam optimisation. Here a candidate costs one 3x3 eigendecomposition plus a
-    grid lookup, and every pair of a round is tested in a single batched call, so the
-    search collapses from minutes to milliseconds.
+    Returns the quad centres of an (eta, omega) grid, (P, S, 3), and the quad areas, (P, S).
+    The grid alone is no uniform sampler: with exponents near 0.1 nearly all of its vertices
+    gather on the edges and corners, which a real cloud rounds off, so unweighted it would
+    penalise exactly the sharp boxes the merge must keep. x and y carry the section exponent
+    and z the profile one, as in `radial_distance`.
     """
-    _, residual = fit_groups(*stack_groups(points, groups, cap, rng), grid=grid)
-    residual = residual.tolist()
+    device = params['scale'].device
+    eta = torch.linspace(-np.pi / 2, np.pi / 2, resolution + 1, device=device)
+    omega = torch.linspace(-np.pi, np.pi, 2 * resolution + 1, device=device)
+    eta, omega = torch.meshgrid(eta, omega, indexing='ij')
+    eta, omega = eta[None], omega[None]
+    e_prof, e_sect = params['shape'][:, 0, None, None], params['shape'][:, 1, None, None]
 
+    def signed_pow(value, exponent):
+        return value.sign() * value.abs() ** exponent
+    cos_eta = signed_pow(torch.cos(eta), e_prof)
+    local = torch.stack([cos_eta * signed_pow(torch.cos(omega), e_sect),
+                         cos_eta * signed_pow(torch.sin(omega), e_sect),
+                         signed_pow(torch.sin(eta), e_prof).expand_as(cos_eta)], -1)
+    local = local * params['scale'][:, None, None]
+    vertices = torch.einsum('pij,pabj->pabi', params['rotate'], local)
+    vertices = vertices + params['trans'][:, None, None]
+
+    corner = vertices[:, :-1, :-1]
+    centres = 0.25 * (corner + vertices[:, 1:, :-1] + vertices[:, :-1, 1:] + vertices[:, 1:, 1:])
+    diagonal = torch.cross(vertices[:, 1:, 1:] - corner,
+                           vertices[:, 1:, :-1] - vertices[:, :-1, 1:], dim=-1)
+    area = 0.5 * diagonal.norm(dim=-1)
+    return centres.flatten(1, 2), area.flatten(1, 2)
+
+
+def inside(points, params):
+    """Whether each point lies strictly inside each primitive, (P, N)."""
+    local = torch.einsum('pji,pnj->pni', params['rotate'], points[None] - params['trans'][:, None])
+    shape = params['shape'][:, None]
+    return log_inside_outside(local, params['scale'][:, None], shape[..., 0], shape[..., 1]) < 0.0
+
+
+def point_distances(points, params):
+    """Radial distance from every point to every primitive in `params`, (P, N)."""
+    local = torch.einsum('pji,pnj->pni', params['rotate'], points[None] - params['trans'][:, None])
+    shape = params['shape'][:, None]
+    return radial_distance(local, params['scale'][:, None], shape[..., 0], shape[..., 1])
+
+
+def leaf_seeds(leaves, sizes, members, net, count):
+    """Network rotations of the `count` largest leaves of each union, (G, count, 3, 3)."""
+    seeds = []
+    for union in members:
+        largest = sorted(union, key=lambda leaf: -sizes[leaf])[:count]
+        largest += largest[-1:] * (count - len(largest))
+        seeds.append(net['rotate'][largest])
+    return torch.stack(seeds)
+
+
+def merge_object(points, leaves, net, rng, tol=1.3, grid=5, cap=192, up=None, trim=0.01,
+                 adjacency=0.05):
+    """
+    Greedily merge touching leaves while one superquadric still explains their points.
+
+    `leaves` are SuperDec's groups and `net` their predicted primitives (or None). Every leaf
+    is represented by the better of its network primitive and its own closed-form fit. A
+    union is accepted only while its single primitive stays under `tol` times the leaves'
+    primitives *together* on two errors:
+    - fit, each point to its closest primitive: neighbours overlap and cover each other's
+      points, so a leaf against its own primitive alone would understate what is lost;
+    - coverage, each surface sample to the closest point of the whole object, ignoring
+      samples buried inside another leaf: the fit error cannot see a primitive that bulges
+      past the object, while a face lying on a neighbour's points is legitimate.
+    The baseline depends only on the leaves, never on earlier merges, so the tolerance cannot
+    compound across rounds. Only leaves whose closest points lie within `adjacency`
+    (normalised units) are ever paired. Returns lists of leaf indices.
+    """
+    device = points.device
+    sizes = [leaf.size for leaf in leaves]
+    index = [torch.as_tensor(leaf, device=device) for leaf in leaves]
+    seeds = None if net is None else net['rotate'][:, None]
+    chosen, _ = fit_groups(*stack_groups(points, leaves, cap, rng), grid=grid,
+                           seeds=seeds, up=up, trim=trim)
+    dist = point_distances(points, chosen)
+    if net is not None:
+        net_dist = point_distances(points, net)
+        own = torch.stack([torch.stack((dist[k, i].mean(), net_dist[k, i].mean()))
+                           for k, i in enumerate(index)])
+        use_net = own[:, 1] <= own[:, 0]
+        dist = torch.where(use_net[:, None], net_dist, dist)
+        chosen = {k: torch.where(use_net.view(-1, *[1] * (v.dim() - 1)), net[k].to(v.dtype), v)
+                  for k, v in chosen.items()}
+
+    samples, area = surface_samples(chosen)
+    count = samples.shape[1]
+    buried = inside(samples.reshape(-1, 3), chosen).view(len(leaves), len(leaves), count)
+    own_surface = torch.eye(len(leaves), dtype=torch.bool, device=device)[..., None]
+    buried = buried.transpose(0, 1) & ~own_surface
+    sample_gap = torch.cdist(samples.reshape(-1, 3), points).amin(1).view(len(leaves), count)
+
+    def base_coverage(members):
+        weight = area[members] * ~buried[members][:, members].any(1)
+        return (weight * sample_gap[members]).sum() / weight.sum().clamp_min(1e-12)
+
+    near = torch.stack([torch.cdist(points, points[i]).amin(1) for i in index])
+    gap = torch.stack([near[:, i].amin(1) for i in index]).cpu().numpy()
+
+    groups = [[k] for k in range(len(leaves))]
     while len(groups) > 1:
-        pairs = [(a, b) for a in range(len(groups)) for b in range(a + 1, len(groups))]
-        union = [np.concatenate((groups[a], groups[b])) for a, b in pairs]
-        _, cand = fit_groups(*stack_groups(points, union, cap, rng), grid=grid)
+        pairs = [(a, b) for a in range(len(groups)) for b in range(a + 1, len(groups))
+                 if gap[np.ix_(groups[a], groups[b])].min() <= adjacency]
+        if not pairs:
+            break
+        members = [groups[a] + groups[b] for a, b in pairs]
+        union = [torch.cat([index[k] for k in m]) for m in members]
+        seeds = None if net is None else leaf_seeds(leaves, sizes, members, net, 2)
+        params, _ = fit_groups(*stack_groups(points, [u.cpu().numpy() for u in union], cap, rng),
+                               grid=grid, seeds=seeds, up=up, trim=trim)
 
-        base = torch.tensor([max(residual[a], residual[b]) for a, b in pairs],
-                            device=cand.device).clamp_min(1e-6)
-        ratio = cand / base
+        # Errors use every point, so the subsample only steers the fit.
+        cand_samples, cand_area = surface_samples(params)
+        cand_gap = torch.cdist(cand_samples.reshape(-1, 3), points).amin(1).view_as(cand_area)
+        cand_gap = (cand_area * cand_gap).sum(1) / cand_area.sum(1).clamp_min(1e-12)
+        ratio = []
+        for g, (m, u) in enumerate(zip(members, union)):
+            fit = point_distances(points[u], {k: v[g:g + 1] for k, v in params.items()}).mean()
+            base_fit = dist[m][:, u].amin(0).mean()
+            ratio.append(torch.maximum(fit / base_fit.clamp_min(MERGE_FLOOR),
+                                       cand_gap[g] / base_coverage(m).clamp_min(MERGE_FLOOR)))
+        ratio = torch.stack(ratio)
         pick = int(ratio.argmin())
         if float(ratio[pick]) > tol:
             break
         a, b = pairs[pick]
-        groups[a], residual[a] = union[pick], float(cand[pick])
+        groups[a] = members[pick]
         groups.pop(b)
-        residual.pop(b)
     return groups
 
 
-def merge_stage(x, out, rng, tol=1.15, grid=5, cap=192):
-    """Rebuild the prediction dict around the merged groups, keeping SuperDec's assignment."""
-    assign = out['assign_matrix'].argmax(-1).cpu().numpy()
-    alive = (out['exist'][..., 0] > 0.5).cpu().numpy()
+def split_leaves(points, labels, ids):
+    """
+    Split the points into one leaf per primitive in `ids`.
+
+    Points owned by any other primitive go to the nearest leaf, so none is left without one.
+    """
+    leaves = [torch.nonzero(labels == i).squeeze(1) for i in ids]
+    orphans = torch.nonzero(~torch.isin(labels, torch.as_tensor(ids, device=labels.device)))
+    orphans = orphans.squeeze(1)
+    if orphans.numel():
+        near = torch.stack([torch.cdist(points[orphans], points[leaf]).amin(1) for leaf in leaves])
+        owner = near.argmin(0)
+        leaves = [torch.cat((leaf, orphans[owner == k])) for k, leaf in enumerate(leaves)]
+    return [leaf.sort().values.cpu().numpy() for leaf in leaves]
+
+
+PRIMITIVE_KEYS = ('scale', 'shape', 'rotate', 'trans')
+
+
+def merge_stage(x, out, rng, tol=1.3, grid=5, cap=192, up=None, trim=0.01, adjacency=0.05,
+                min_points=32):
+    """
+    Merge SuperDec's primitives, keeping the network's own fit wherever nothing was merged.
+
+    Primitives with fewer than `min_points` points are dropped and their points go to the
+    nearest surviving group. A group that survives alone keeps the network's parameters
+    untouched; only merged groups are refitted in closed form, on a finer grid and seeded
+    with the rotations of their two largest leaves. `up` is the table normal in the frame of
+    `x` (+Y after the canonical rotation), or None if unknown.
+    """
+    assign = out['assign_matrix'].argmax(-1)
+    alive = out['exist'][..., 0] > 0.5
     batch, count = x.shape[0], x.shape[1]
 
     kept = []
     for b in range(batch):
-        groups = [np.nonzero(assign[b] == i)[0] for i in np.nonzero(alive[b])[0]]
-        groups = [g for g in groups if g.size >= 32] or [np.arange(count)]
-        kept.append(merge_object(x[b], groups, tol, rng, grid, cap))
+        ids = [int(i) for i in torch.nonzero(alive[b]).squeeze(1)
+               if int((assign[b] == i).sum()) >= min_points]
+        if not ids:
+            kept.append(([np.arange(count)], None, [[0]]))
+            continue
+        leaves = split_leaves(x[b], assign[b], ids)
+        net = {k: out[k][b, ids].to(x.dtype) for k in PRIMITIVE_KEYS}
+        groups = merge_object(x[b], leaves, net, rng, tol, grid, cap, up, trim, adjacency)
+        kept.append((leaves, net, groups))
 
-    width = max(len(g) for g in kept)
+    width = max(len(groups) for _, _, groups in kept)
     merged = {
         'scale': torch.full((batch, width, 3), 1e-4),
         'shape': torch.ones(batch, width, 2),
@@ -326,15 +551,35 @@ def merge_stage(x, out, rng, tol=1.15, grid=5, cap=192):
         'exist': torch.zeros(batch, width, 1),
         'assign_matrix': torch.zeros(batch, count, width),
     }
-    for b, groups in enumerate(kept):
-        pts, mask = stack_groups(x[b], groups, 4 * cap, rng)
-        params, _ = fit_groups(pts, mask, grid=2 * grid + 3)
-        for key, value in params.items():
-            merged[key][b, :len(groups)] = value.cpu()
-        merged['exist'][b, :len(groups), 0] = 1.0
+    for b, (leaves, net, groups) in enumerate(kept):
+        refit = [k for k, g in enumerate(groups) if net is None or len(g) > 1]
+        if refit:
+            union = [np.concatenate([leaves[i] for i in groups[k]]) for k in refit]
+            seeds = None if net is None else leaf_seeds(
+                leaves, [leaf.size for leaf in leaves], [groups[k] for k in refit], net, 2)
+            params, _ = fit_groups(*stack_groups(x[b], union, 4 * cap, rng), grid=2 * grid + 3,
+                                   seeds=seeds, up=up, trim=trim)
+            for key, value in params.items():
+                merged[key][b, refit] = value.float().cpu()
         for k, group in enumerate(groups):
-            merged['assign_matrix'][b, group, k] = 1.0
+            if k not in refit:
+                for key in PRIMITIVE_KEYS:
+                    merged[key][b, k] = net[key][group[0]].float().cpu()
+            merged['exist'][b, k, 0] = 1.0
+            merged['assign_matrix'][b, np.concatenate([leaves[i] for i in group]), k] = 1.0
     return {k: v.to(x.device) for k, v in merged.items()}
+
+
+def table_up(plane, frame):
+    """
+    Return the table normal in the frame SuperDec sees.
+
+    That is +Y after the canonical rotation, the camera-frame normal otherwise (normalisation
+    only shifts and scales), and None without a plane.
+    """
+    if frame is not None:
+        return np.array([0.0, 1.0, 0.0])
+    return None if plane is None else np.asarray(plane[0], dtype=np.float64)
 
 
 def primitive_errors(x, out):
@@ -403,8 +648,9 @@ class SuperDecRunner:
     """
 
     def __init__(self, superdec_root, checkpoint_dir, device=None, denoise=True,
-                 complete=True, canonical=True, uniform=True, merge=True, merge_tol=1.15,
-                 merge_grid=5, merge_cap=192, lm=False, lm_steps=5, seed=0):
+                 complete=True, canonical=True, uniform=True, merge=True, merge_tol=1.3,
+                 merge_grid=5, merge_cap=192, merge_trim=0.01, merge_adjacency=0.05,
+                 lm=False, lm_steps=5, seed=0):
         add_superdec_to_path(superdec_root)
         self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = load_model(checkpoint_dir, self.device)
@@ -416,11 +662,14 @@ class SuperDecRunner:
         self.merge_tol = merge_tol
         self.merge_grid = merge_grid
         self.merge_cap = merge_cap
+        self.merge_trim = merge_trim
+        self.merge_adjacency = merge_adjacency
         self.lm = lm and torch.device(self.device).type == 'cuda'
         if lm and not self.lm:
             warnings.warn('LM refinement needs CUDA; disabled on ' + str(self.device))
         self.lm_steps = lm_steps
         self.last_lm_stats = None
+        self.seed = seed
         self.rng = np.random.default_rng(seed)
 
     def prepare(self, points, plane, frame):
@@ -451,7 +700,10 @@ class SuperDecRunner:
         out = self.model(x)
         out = {k: v for k, v in out.items() if isinstance(v, torch.Tensor)}
         if self.merge:
-            out = merge_stage(x, out, self.rng, self.merge_tol, self.merge_grid, self.merge_cap)
+            # A fresh generator per call: the same cloud always merges the same way.
+            out = merge_stage(x, out, np.random.default_rng(self.seed), self.merge_tol,
+                              self.merge_grid, self.merge_cap, table_up(plane, frame),
+                              self.merge_trim, self.merge_adjacency)
         if self.lm:
             out, self.last_lm_stats = lm_stage(x, out, self.lm_steps)
 

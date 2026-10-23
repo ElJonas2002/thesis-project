@@ -16,6 +16,7 @@ segmented clouds as PLY files to open elsewhere.
 """
 import argparse
 import glob
+import json
 import os
 import re
 import sys
@@ -28,7 +29,7 @@ sys.path.insert(0, os.path.join(REPO_ROOT, 'src', 'intel_realsense'))
 
 from intel_realsense.superdec_utils import (  # noqa: E402
     N_POINTS, add_superdec_to_path, canonical_rotation, complete_shell, denoise, load_model,
-    lm_stage, merge_stage, normalize_points, uniform_resample)
+    lm_stage, merge_stage, normalize_points, table_up, uniform_resample)
 
 add_superdec_to_path(os.path.join(REPO_ROOT, 'superdec'))
 
@@ -97,10 +98,16 @@ def main():
     parser.add_argument('--lm-steps', type=int, default=5, help='LM iterations')
     parser.add_argument('--merge', action='store_true',
                         help='greedily merge primitives a single superquadric can explain')
-    parser.add_argument('--merge-tol', type=float, default=1.15,
-                        help='accept a merge while its residual stays under tol x the children')
+    parser.add_argument('--merge-tol', type=float, default=1.3,
+                        help='accept a merge while its fit and coverage errors stay under '
+                             'tol x those of the primitives it replaces')
     parser.add_argument('--merge-grid', type=int, default=5, help='exponent grid used in the search')
     parser.add_argument('--merge-cap', type=int, default=192, help='points per group during the search')
+    parser.add_argument('--merge-trim', type=float, default=0.01,
+                        help='fraction of points ignored per side when fitting a merged primitive')
+    parser.add_argument('--merge-adjacency', type=float, default=0.05,
+                        help='max gap between primitives that may merge (normalised units)')
+    parser.add_argument('--json', help='write the per-object metrics to this JSON file')
     parser.add_argument('--resolution', type=int, default=20)
     parser.add_argument('--export', help='write the fitted meshes and segmented clouds as PLY here')
     parser.add_argument('--viser', action='store_true')
@@ -143,12 +150,24 @@ def main():
         out = model(x)
     out = {k: v.to(device) for k, v in out.items() if isinstance(v, torch.Tensor)}
 
+    raw_count = (out['exist'][..., 0] > 0.5).sum(1).tolist()
+    merge_time = None
     if args.merge:
+        frame = canonical_rotation(plane[0]) if (args.canonical and plane is not None) else None
+        if device == 'cuda':
+            torch.cuda.synchronize()
         start = time.perf_counter()
         with torch.no_grad():
-            out = merge_stage(x, out, rng, args.merge_tol, args.merge_grid, args.merge_cap)
-        print(f'\nmerge: {time.perf_counter() - start:.2f} s for {x.shape[0]} objects')
+            # Same seeding as SuperDecRunner: a fresh generator, so the merge is reproducible.
+            out = merge_stage(x, out, np.random.default_rng(0), args.merge_tol, args.merge_grid,
+                              args.merge_cap, table_up(plane, frame), args.merge_trim,
+                              args.merge_adjacency)
+        if device == 'cuda':
+            torch.cuda.synchronize()
+        merge_time = time.perf_counter() - start
+        print(f'\nmerge: {merge_time:.2f} s for {x.shape[0]} objects')
 
+    unassigned = unassigned_fraction(out)
     errors = object_errors(x, out)
     lm_errors = None
     if args.lm:
@@ -178,11 +197,56 @@ def main():
         for name, error, lm_error, scale in zip(names, errors, lm_errors, scales):
             print(f'{name:>28s}  {error * scale * 1000:10.2f} mm  {lm_error * scale * 1000:10.2f} mm')
 
+    coverage = surface_coverage(handler, pcs)
+    print(f'\n{"object":>28s}  {"#sq net":>7s}  {"cover":>8s}  {"cover p95":>9s}  '
+          f'{"chamfer":>8s}  {"unassigned":>10s}')
+    final_errors = errors if lm_errors is None else lm_errors
+    for i, name in enumerate(names):
+        cover, cover95 = coverage[i]
+        chamfer = 0.5 * (final_errors[i] * scales[i] * 1000 + cover)
+        print(f'{name:>28s}  {raw_count[i]:7d}  {cover:5.2f} mm  {cover95:6.2f} mm  '
+              f'{chamfer:5.2f} mm  {100 * unassigned[i]:9.1f}%')
+    print('\ncover = mean distance from the primitive surfaces to the nearest input point; it')
+    print('catches primitives that bulge past the object, which the recon error cannot see.')
+
+    if args.json:
+        alive = handler.exist[:, :, 0] > 0.5
+        rows = [{'object': name, 'sq_net': int(raw_count[i]), 'sq': int(alive[i].sum()),
+                 'recon_mm': final_errors[i] * scales[i] * 1000, 'cover_mm': coverage[i][0],
+                 'cover_p95_mm': coverage[i][1], 'unassigned': unassigned[i],
+                 'eps': handler.exponents[i][alive[i]].mean(axis=0).tolist(),
+                 'volume': float(np.prod(handler.scale[i][alive[i]] * 2.0, axis=1).sum())}
+                for i, name in enumerate(names)]
+        with open(args.json, 'w') as f:
+            json.dump({'snapshot': snapshot_dir, 'args': vars(args), 'merge_s': merge_time,
+                       'objects': rows}, f, indent=1)
+
     if args.export:
         export(handler, names, os.path.join(REPO_ROOT, args.export), args.resolution)
 
     if args.viser:
         show(handler, args.resolution)
+
+
+def unassigned_fraction(out):
+    """Share of points whose primitive is switched off, or that have no primitive at all."""
+    assign = out['assign_matrix']
+    alive = out['exist'][..., 0] > 0.5
+    owner = alive.gather(1, assign.argmax(-1)) & (assign.sum(-1) > 0)
+    return (1.0 - owner.float().mean(1)).tolist()
+
+
+def surface_coverage(handler, pcs, samples=4096):
+    """Mean and p95 distance (mm) from area-uniform samples of the primitives to the cloud."""
+    rows = []
+    for mesh, cloud in zip(handler.get_meshes(resolution=40, colors=False), pcs):
+        if mesh is None:
+            rows.append((float('nan'), float('nan')))
+            continue
+        surface = torch.as_tensor(np.asarray(mesh.sample(samples)), dtype=torch.float32)
+        dist = torch.cdist(surface, torch.as_tensor(cloud, dtype=torch.float32)).amin(1) * 1000
+        rows.append((float(dist.mean()), float(dist.quantile(0.95))))
+    return rows
 
 
 def object_errors(x, out):
